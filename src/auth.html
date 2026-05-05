@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>Preventivatore BCB — Sblocco</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(135deg, #1b3a5c 0%, #2563a8 100%);
+      color: #0f1a2a;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 14px;
+      padding: 32px 36px;
+      width: 380px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+      text-align: center;
+    }
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 19px;
+      color: #1b3a5c;
+    }
+    .subtitle {
+      color: #4a5a72;
+      font-size: 13px;
+      margin: 0 0 22px 0;
+      line-height: 1.4;
+    }
+    label {
+      display: block;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 600;
+      color: #4a5a72;
+      margin-bottom: 6px;
+    }
+    input[type=password], input[type=text] {
+      width: 100%;
+      padding: 11px 14px;
+      border-radius: 8px;
+      border: 1px solid #c9d6e8;
+      font-size: 15px;
+      outline: none;
+      font-family: inherit;
+      transition: border-color 0.15s;
+    }
+    input[type=password]:focus, input[type=text]:focus {
+      border-color: #2563a8;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    button {
+      width: 100%;
+      padding: 11px 16px;
+      border-radius: 8px;
+      border: none;
+      background: #1b3a5c;
+      color: white;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 16px;
+      transition: background 0.15s;
+      font-family: inherit;
+    }
+    button:hover { background: #2563a8; }
+    button:disabled { background: #8b97aa; cursor: not-allowed; }
+    button.secondary {
+      background: transparent;
+      color: #4a5a72;
+      border: 1px solid #c9d6e8;
+      margin-top: 8px;
+    }
+    button.secondary:hover { background: #eef4fb; color: #1b3a5c; }
+    .error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      color: #b91c1c;
+      padding: 10px 12px;
+      border-radius: 7px;
+      font-size: 13px;
+      margin-top: 14px;
+      text-align: left;
+    }
+    .info {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      color: #1e40af;
+      padding: 10px 12px;
+      border-radius: 7px;
+      font-size: 12px;
+      margin-top: 14px;
+      text-align: left;
+    }
+    .footer-note {
+      margin-top: 18px;
+      font-size: 11px;
+      color: #4a5a72;
+      line-height: 1.5;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #4a5a72;
+    }
+    .checkbox-row input { width: 14px; height: 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🔐 Preventivatore BCB</h1>
+    <p class="subtitle">
+      Inserisci la password fornita dallo Studio per accedere all'applicazione.
+    </p>
+
+    <form id="authForm" autocomplete="off">
+      <label for="pwd">Password</label>
+      <div class="row">
+        <input type="password" id="pwd" autofocus required spellcheck="false" autocapitalize="off" />
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="showPwd" />
+        <label for="showPwd" style="display:inline; margin:0; font-size:12px; cursor:pointer;">Mostra password</label>
+      </div>
+      <button type="submit" id="submitBtn">Sblocca</button>
+    </form>
+
+    <div id="errorBox" class="error" style="display:none;"></div>
+
+    <div id="loadingBox" class="info" style="display:none;">
+      ⏳ Verifica della password in corso...
+    </div>
+
+    <p class="footer-note">
+      L'app verifica la password contro un elenco aggiornato gestito dallo Studio.
+      Senza connessione Internet usa l'ultima lista valida ricevuta.
+    </p>
+  </div>
+
+  <script>
+    const form = document.getElementById('authForm');
+    const pwdInput = document.getElementById('pwd');
+    const showPwdChk = document.getElementById('showPwd');
+    const errorBox = document.getElementById('errorBox');
+    const loadingBox = document.getElementById('loadingBox');
+    const submitBtn = document.getElementById('submitBtn');
+
+    showPwdChk.addEventListener('change', (e) => {
+      pwdInput.type = e.target.checked ? 'text' : 'password';
+    });
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.style.display = 'block';
+      loadingBox.style.display = 'none';
+    }
+    function hideError() {
+      errorBox.style.display = 'none';
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+      const pwd = pwdInput.value;
+      if (!pwd) return;
+
+      submitBtn.disabled = true;
+      loadingBox.style.display = 'block';
+
+      try {
+        // Tenta sempre un refresh della lista prima di verificare,
+        // così Marco può cambiare password e l'utente la vede al primo tentativo.
+        await window.authAPI.refreshList();
+        const result = await window.authAPI.unlock(pwd);
+        if (result && result.ok) {
+          // Sblocco riuscito: il main.js apre la home e chiude questa finestra
+          loadingBox.textContent = '✓ Accesso autorizzato. Apertura...';
+        } else {
+          showError(
+            result && result.killSwitch
+              ? 'Accesso temporaneamente disattivato dallo Studio. Riprova più tardi.'
+              : 'Password errata. Verifica con lo Studio.'
+          );
+          submitBtn.disabled = false;
+          pwdInput.value = '';
+          pwdInput.focus();
+        }
+      } catch (err) {
+        showError('Errore: ' + err.message);
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

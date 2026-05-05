@@ -13,6 +13,155 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs').promises;
+const crypto = require('crypto');
+const https = require('https');
+
+/* ================================================================
+   AUTH — gestione lock dell'app con password remota
+
+   Schema:
+   - L'app fetcha periodicamente da AUTH_GIST_URL una lista di hash
+     di password "valide" (gestita da Marco via Gist).
+   - L'utente sblocca inserendo una password che corrisponde a uno
+     degli hash. L'unlock viene memorizzato localmente.
+   - Se Marco rimuove un hash dalla lista, al prossimo avvio l'app
+     vede che l'unlock locale non è più valido e blocca tutto.
+   - Funzionamento offline: usa la cache dell'ultima lista valida.
+
+   Marco non conosce nessuna password in chiaro: nel Gist ci sono solo
+   gli hash (formato scrypt: "<salt>:<derivedKey>"). Quando vuole
+   cambiare password, genera un nuovo hash con il bottone "Genera
+   hash" nella schermata di sblocco (visibile solo se l'app è
+   già sbloccata) o col tool da terminale tools/genera-hash.mjs.
+   ================================================================ */
+
+// URL del Gist di Marco (PLACEHOLDER — sostituito al primo deploy).
+// Esempio reale: https://gist.githubusercontent.com/mbrs99/<gist-id>/raw/preventivatore-auth.json
+const AUTH_GIST_URL = 'PLACEHOLDER_GIST_RAW_URL';
+
+// Lista di hash "di emergenza" embeddati nel binario: usati come ULTIMO
+// fallback se il Gist non è raggiungibile e nemmeno la cache locale.
+// Garantisce che la primissima apertura dopo l'installazione funzioni
+// anche senza connessione. Marco può cambiare questa password tramite
+// il Gist senza dover rilasciare una nuova versione del binario.
+const AUTH_FALLBACK_HASHES = [
+  // Password iniziale: "studio-bcb-mestre-25"
+  'ed862ebb9f967a4b420c1fdd20d88a55:ed52291c5d8763dbc3b6410f21985ab97981f3516e80a512a01c2c1199565aadf0611408d350f578dc7cd50d2a45358cd41c06b1fd38a2737a23c06cfbb454fa',
+];
+
+// Calcolo hash scrypt (salt+key). Formato stored: "<salt-hex>:<hash-hex>"
+function hashPasswordSync(plaintext, saltBuf = null) {
+  const salt = saltBuf || crypto.randomBytes(16);
+  const hash = crypto.scryptSync(String(plaintext), salt, 64);
+  return salt.toString('hex') + ':' + hash.toString('hex');
+}
+
+function verifyPasswordAgainstStored(plaintext, stored) {
+  try {
+    const [saltHex, hashHex] = stored.split(':');
+    if (!saltHex || !hashHex) return false;
+    const salt = Buffer.from(saltHex, 'hex');
+    const expected = Buffer.from(hashHex, 'hex');
+    if (expected.length !== 64) return false;
+    const actual = crypto.scryptSync(String(plaintext), salt, 64);
+    return crypto.timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
+
+function fetchUrlAsString(url, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    if (!url || url.startsWith('PLACEHOLDER')) {
+      return reject(new Error('URL Gist non configurato'));
+    }
+    const req = https.get(url, { headers: { 'User-Agent': 'PreventivatoreBCB' } }, (res) => {
+      // Segui redirect (es. github → user-content)
+      if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+        return resolve(fetchUrlAsString(res.headers.location, timeoutMs));
+      }
+      if (res.statusCode !== 200) {
+        return reject(new Error('HTTP ' + res.statusCode));
+      }
+      let data = '';
+      res.setEncoding('utf-8');
+      res.on('data', (chunk) => data += chunk);
+      res.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error('timeout')); });
+  });
+}
+
+// Modulo auth: stato in memoria + persistenza su disco
+const authState = {
+  validHashes: AUTH_FALLBACK_HASHES.slice(),  // ultima lista nota (default = fallback)
+  killSwitch: false,                          // se true, app bloccata sempre
+  lastFetchedAt: null,                        // timestamp ultima fetch riuscita
+  unlockedHash: null,                         // hash salvato dopo unlock (per ricontrollare validità)
+};
+
+function getAuthCachePath() {
+  // Salvato dentro DATA_ROOT (creato in initAuthCacheFolder)
+  return path.join(DATA_ROOT, '.auth-cache.json');
+}
+
+async function loadAuthCache() {
+  try {
+    const txt = await fsp.readFile(getAuthCachePath(), 'utf-8');
+    const obj = JSON.parse(txt);
+    if (Array.isArray(obj.validHashes)) authState.validHashes = obj.validHashes;
+    if (typeof obj.killSwitch === 'boolean')   authState.killSwitch   = obj.killSwitch;
+    if (typeof obj.lastFetchedAt === 'string') authState.lastFetchedAt = obj.lastFetchedAt;
+    if (typeof obj.unlockedHash === 'string')  authState.unlockedHash  = obj.unlockedHash;
+  } catch {
+    // Cache assente o corrotta — uso il fallback
+  }
+}
+
+async function saveAuthCache() {
+  try {
+    await fsp.mkdir(DATA_ROOT, { recursive: true });
+    await fsp.writeFile(getAuthCachePath(), JSON.stringify({
+      validHashes:    authState.validHashes,
+      killSwitch:     authState.killSwitch,
+      lastFetchedAt:  authState.lastFetchedAt,
+      unlockedHash:   authState.unlockedHash,
+    }, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[auth] Errore salvataggio cache:', err.message);
+  }
+}
+
+async function refreshAuthList() {
+  try {
+    const text = await fetchUrlAsString(AUTH_GIST_URL, 5000);
+    const data = JSON.parse(text);
+    if (Array.isArray(data.validHashes) && data.validHashes.length > 0) {
+      // Aggiungo SEMPRE i fallback in coda (di sicurezza, nel caso
+      // Marco svuoti per errore il Gist rendendo l'app inaccessibile)
+      const merged = data.validHashes.slice();
+      for (const f of AUTH_FALLBACK_HASHES) {
+        if (!merged.includes(f)) merged.push(f);
+      }
+      authState.validHashes = merged;
+    }
+    authState.killSwitch    = !!data.killSwitch;
+    authState.lastFetchedAt = new Date().toISOString();
+    await saveAuthCache();
+    console.log('[auth] Lista password aggiornata da Gist (' + authState.validHashes.length + ' hash)');
+    return true;
+  } catch (err) {
+    console.warn('[auth] Fetch fallita:', err.message, '— uso cache/fallback');
+    return false;
+  }
+}
+
+function isCurrentlyUnlocked() {
+  if (authState.killSwitch) return false;
+  if (!authState.unlockedHash) return false;
+  return authState.validHashes.includes(authState.unlockedHash);
+}
 
 /* ---------------- Path risoluzione dei dati persistenti ----------
  *
@@ -393,11 +542,87 @@ ipcMain.handle('tariffario:saveBuffer', async (_, { path: filePath, buffer }) =>
   }
 });
 
+/* ---------------- IPC Handlers: auth (lock con password) -------- */
+
+ipcMain.handle('auth:isUnlocked', async () => {
+  return { ok: true, unlocked: isCurrentlyUnlocked(), killSwitch: authState.killSwitch };
+});
+
+ipcMain.handle('auth:unlock', async (_, password) => {
+  if (authState.killSwitch) return { ok: false, killSwitch: true };
+  for (const stored of authState.validHashes) {
+    if (verifyPasswordAgainstStored(password, stored)) {
+      authState.unlockedHash = stored;
+      await saveAuthCache();
+      // Apri la home e chiudi la finestra di auth
+      if (authWindow) {
+        const w = authWindow;
+        authWindow = null;
+        createHomeWindow();
+        w.close();
+      }
+      return { ok: true };
+    }
+  }
+  return { ok: false };
+});
+
+ipcMain.handle('auth:lock', async () => {
+  authState.unlockedHash = null;
+  await saveAuthCache();
+  // Chiudi tutte le finestre tranne la auth
+  for (const w of BrowserWindow.getAllWindows()) w.close();
+  createAuthWindow();
+  return { ok: true };
+});
+
+ipcMain.handle('auth:hashPassword', async (_, plain) => {
+  return { ok: true, hash: hashPasswordSync(plain) };
+});
+
+ipcMain.handle('auth:refreshList', async () => {
+  const ok = await refreshAuthList();
+  return { ok, lastFetchedAt: authState.lastFetchedAt, count: authState.validHashes.length };
+});
+
 /* ---------------- Finestre ---------------------------------- */
 
 let homeWindow = null;
 let preventivatoreWindow = null;
 let editorWindow = null;
+let authWindow = null;
+
+function createAuthWindow() {
+  if (authWindow) {
+    authWindow.focus();
+    return;
+  }
+  authWindow = new BrowserWindow({
+    width: 480,
+    height: 540,
+    minWidth: 420,
+    minHeight: 480,
+    title: 'Preventivatore BCB — Sblocco',
+    backgroundColor: '#1b3a5c',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    autoHideMenuBar: true,
+    resizable: false,
+    maximizable: false,
+  });
+  authWindow.loadFile(path.join(__dirname, 'auth.html'));
+  authWindow.on('closed', () => {
+    const wasInteractiveClose = authWindow !== null;
+    authWindow = null;
+    // Se l'utente chiude la finestra di auth senza sbloccare, chiudi tutta l'app
+    if (wasInteractiveClose && !isCurrentlyUnlocked()) {
+      app.quit();
+    }
+  });
+}
 
 function createHomeWindow() {
   homeWindow = new BrowserWindow({
@@ -511,10 +736,23 @@ ipcMain.handle('app:getPaths', () => {
 
 app.whenReady().then(async () => {
   await ensureDataFolders();
-  createHomeWindow();
+  // Carica cache auth (lista valida storica + ultimo unlock)
+  await loadAuthCache();
+  // Tenta refresh dalla URL del Gist (non bloccante: timeout 5s, fallback su cache)
+  await refreshAuthList();
+  // Se l'unlock locale è ancora valido contro la lista corrente: apri Home.
+  // Altrimenti: schermata di sblocco.
+  if (isCurrentlyUnlocked()) {
+    createHomeWindow();
+  } else {
+    createAuthWindow();
+  }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createHomeWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      if (isCurrentlyUnlocked()) createHomeWindow();
+      else createAuthWindow();
+    }
   });
 });
 

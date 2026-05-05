@@ -47,5 +47,14 @@ contextBridge.exposeInMainWorld('tariffarioAPI', {
   saveBuffer:         (path, buffer) => ipcRenderer.invoke('tariffario:saveBuffer', { path, buffer }),
 });
 
+// window.authAPI — gestione del lock con password remota
+contextBridge.exposeInMainWorld('authAPI', {
+  unlock:        (password) => ipcRenderer.invoke('auth:unlock', password),
+  lock:          ()         => ipcRenderer.invoke('auth:lock'),
+  isUnlocked:    ()         => ipcRenderer.invoke('auth:isUnlocked'),
+  hashPassword:  (plain)    => ipcRenderer.invoke('auth:hashPassword', plain),
+  refreshList:   ()         => ipcRenderer.invoke('auth:refreshList'),
+});
+
 // Debug: segnala al renderer che l'ambiente Electron è caricato
 contextBridge.exposeInMainWorld('isElectronApp', true);
