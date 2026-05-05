@@ -35,9 +35,10 @@ const https = require('https');
    già sbloccata) o col tool da terminale tools/genera-hash.mjs.
    ================================================================ */
 
-// URL del Gist di Marco (PLACEHOLDER — sostituito al primo deploy).
-// Esempio reale: https://gist.githubusercontent.com/mbrs99/<gist-id>/raw/preventivatore-auth.json
-const AUTH_GIST_URL = 'PLACEHOLDER_GIST_RAW_URL';
+// URL del Gist di Marco — versione "stabile" senza commit SHA, così punta
+// sempre all'ultima revisione del file (quando Marco modifica il Gist,
+// l'app vede automaticamente la nuova versione al riavvio successivo).
+const AUTH_GIST_URL = 'https://gist.githubusercontent.com/mbrs99/9977a30f9f545c66d50c499f02f4af90/raw/preventivatore-auth.json';
 
 // Lista di hash "di emergenza" embeddati nel binario: usati come ULTIMO
 // fallback se il Gist non è raggiungibile e nemmeno la cache locale.
