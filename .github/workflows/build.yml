@@ -1,0 +1,115 @@
+# Build automatico Mac + Windows + Linux per Preventivatore BCB
+#
+# Quando viene eseguito:
+#   - Ad ogni push sul branch main
+#   - Quando crei un tag che inizia con "v" (es. v1.0.0, v1.1.0) — questo
+#     è il modo "ufficiale" per produrre una release distribuibile
+#   - Manualmente dal tab "Actions" di GitHub (utile per test)
+#
+# Cosa produce:
+#   - macOS: file .dmg (universal: funziona su Intel e Apple Silicon)
+#   - Windows: file .exe portable (nessuna installazione necessaria)
+#   - Linux: file .AppImage (eseguibile portable)
+#
+# I file sono scaricabili dalla pagina del run nel tab "Actions" di GitHub
+# (sezione "Artifacts" in fondo). Se è una release tag (vX.Y.Z), i file
+# vengono allegati automaticamente alla pagina "Releases".
+
+name: Build cross-platform
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:  # permette esecuzione manuale dal sito GitHub
+
+jobs:
+  build:
+    strategy:
+      # Continua a buildare le altre piattaforme anche se una fallisce
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            artifact_name: preventivatore-bcb-mac
+            artifact_glob: |
+              release/*.dmg
+              release/*.zip
+          - os: windows-latest
+            platform: win
+            artifact_name: preventivatore-bcb-windows
+            artifact_glob: |
+              release/*.exe
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: preventivatore-bcb-linux
+            artifact_glob: |
+              release/*.AppImage
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer (Vite)
+        run: npm run build:renderer
+
+      - name: Build Electron — ${{ matrix.platform }}
+        run: npm run pack:${{ matrix.platform }}
+        env:
+          # GitHub token per electron-builder (evita rate limiting su release)
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Disabilita firma codice (non disponibile senza certificato)
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_glob }}
+          retention-days: 30
+          if-no-files-found: error
+
+  # Job aggiuntivo: se è un tag vX.Y.Z, crea automaticamente una Release
+  # GitHub con i 3 file allegati (così i destinatari hanno un link unico).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # serve per creare la release
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f -ls
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Preventivatore BCB ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.AppImage
+            artifacts/**/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

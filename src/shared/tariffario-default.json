@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 2,
+  "fonte": "Tariffario BCB 2026 (incorporato)",
+  "anno": 2026,
+  "ultimaModifica": null,
+
+  "contabilita": {
+    "forfettaria": {
+      "tariffa": 850,
+      "etichetta": "Tariffa annua fissa"
+    },
+    "semplificata": {
+      "etichetta": "Importo fisso in base al numero di documenti annui (NON si sommano a scaglioni)",
+      "fasce": [
+        { "max": 50,  "val": 677.71,  "etichetta": "Fino a 50 documenti annui" },
+        { "max": 100, "val": 1058.17, "etichetta": "Da 51 a 100 documenti" },
+        { "max": 300, "val": 1521.86, "etichetta": "Da 101 a 300 documenti" },
+        { "max": 600, "val": 2229.29, "etichetta": "Da 301 a 600 documenti" }
+      ],
+      "extraPer100": 233.04,
+      "extraEtichetta": "per ogni ulteriori 100 documenti oltre l'ultima fascia"
+    },
+    "ordinaria": {
+      "etichetta": "Importo fisso in base al numero di rilevazioni contabili annue (NON si sommano a scaglioni)",
+      "fasce": [
+        { "max": 100,  "val": 850.10,  "etichetta": "Fino a 100 rilevazioni contabili" },
+        { "max": 500,  "val": 1890.44, "etichetta": "Da 101 a 500 rilevazioni" },
+        { "max": 1250, "val": 3198.29, "etichetta": "Da 501 a 1.250 rilevazioni" },
+        { "max": 2000, "val": 4910.39, "etichetta": "Da 1.251 a 2.000 rilevazioni" }
+      ],
+      "extraPer100": 208.07,
+      "extraEtichetta": "per ogni ulteriori 100 rilevazioni oltre l'ultima fascia"
+    },
+    "extra": [
+      { "id": "fattElettr",         "nome": "Elaborazione e Invio Fattura Elettronica",                 "tariffa": 5.45,   "unita": "per fattura" },
+      { "id": "xmlMensile",         "nome": "Invio File XML Mensile (TD17/18/20)",                       "tariffa": 10.00,  "unita": "per file" },
+      { "id": "maggiorCorr",        "nome": "Maggiorazione Annua Recupero Corrispettivi Telematici",     "tariffa": 300.00, "unita": "fisso annuo" },
+      { "id": "situazContabile",    "nome": "Redazione Situazione Contabile Periodica/Infrannuale",      "tariffa": 77.00,  "unita": "per situazione" },
+      { "id": "situazPatrimoniale", "nome": "Predisposizione Situazioni Patrimoniali Periodiche",        "tariffa": 120.00, "unita": "per situazione" },
+      { "id": "liquidIVAMensili",   "nome": "Liquidazioni IVA Mensili",                                  "tariffa": 50.00,  "unita": "fisso annuo" },
+      { "id": "liquidIVATrim",      "nome": "Liquidazioni IVA Trimestrali",                              "tariffa": 72.00,  "unita": "fisso annuo" },
+      { "id": "importXML",          "nome": "Importazione File XML Fatture Elettroniche (SDI)",          "tariffa": 36.00,  "unita": "fisso annuo" }
+    ]
+  },
+
+  "dichiarazioni": {
+    "lipe":    { "tariffa": 41.17,  "etichetta": "Comunicazioni Periodiche IVA (per singolo invio, da 1 a 4)" },
+    "dichIVA": { "tariffa": 183.23, "etichetta": "Dichiarazione Annuale IVA (importo fisso)" },
+    "cu": {
+      "etichetta": "Certificazione Unica",
+      "interne":      { "tariffa": 36.02, "etichetta": "CU contabilità interne (importo fisso)" },
+      "soloTel":      { "tariffa": 59.90, "etichetta": "CU consulenze solo telematico (importo fisso)" },
+      "telExcel":     { "tariffa": 71.90, "etichetta": "CU consulenze telematico + excel (base)" },
+      "perPercipiente": { "tariffa": 5.99, "etichetta": "CU - per ogni percipiente aggiuntivo" }
+    },
+    "m770": {
+      "etichetta": "Modello 770",
+      "modalita": "perRigo",
+      "fisso":   { "tariffa": 130, "etichetta": "Importo fisso (modalità alternativa)" },
+      "base":    { "tariffa": 73.08, "etichetta": "Base + righi versamenti" },
+      "perRigo": { "tariffa": 7.22,  "etichetta": "per ogni rigo versamento" }
+    },
+    "f24": {
+      "etichetta": "Pagamento Modelli F24",
+      "modalita": "perDelega",
+      "fisso":     { "tariffa": 130, "etichetta": "Importo fisso (modalità alternativa)" },
+      "perDelega": { "tariffa": 11.88, "etichetta": "Per ogni delega inviata" }
+    },
+    "sistemats": { "tariffa": 169.16, "etichetta": "Compilazione e Invio Dati al Sistema Tessera Sanitaria" },
+    "extra": [
+      { "id": "ivaTR",              "nome": "Modello IVA TR",                              "tipo": "fisso",  "tariffa": 80.80,  "unita": "fisso" },
+      { "id": "downloadISA",        "nome": "Download ISA",                                 "tipo": "fisso",  "tariffa": 11.29,  "unita": "fisso" },
+      { "id": "letteraIntento",     "nome": "Invio Telematico Lettere d'Intento",           "tipo": "composta", "base": 60.76, "perUnita": 5.00, "etichettaUnita": "per lettera" },
+      { "id": "invioDich",          "nome": "Invio Telematico Dichiarazioni Fiscali",       "tipo": "perUnita", "tariffa": 70.00, "unita": "per invio" }
+    ]
+  },
+
+  "quadri": {
+    "upf": {
+      "etichetta": "Modello Unico Persone Fisiche",
+      "voci": [
+        { "id": "base", "codice": "BASE",     "nome": "Quadri base (RN/Oneri/Familiari a carico)", "tariffa": 73.09,  "modalita": "fisso" },
+        { "id": "ra",   "codice": "R A",      "nome": "Terreni",                                    "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "rb",   "codice": "R B",      "nome": "Fabbricati",                                 "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "rc",   "codice": "R C",      "nome": "Dipendenti",                                 "tariffa": 21.63,  "modalita": "fisso" },
+        { "id": "re1",  "codice": "R E sez.1","nome": "Reddito Professionista",                     "tariffa": 289.24, "modalita": "fisso" },
+        { "id": "re2",  "codice": "R E sez.2","nome": "Co.co.co. e altri",                          "tariffa": 28.83,  "modalita": "fisso" },
+        { "id": "rf",   "codice": "R F",      "nome": "Reddito impresa ordinario",                  "tariffa": 361.29, "modalita": "fisso" },
+        { "id": "rg",   "codice": "R G",      "nome": "Reddito impresa semplificato",               "tariffa": 289.24, "modalita": "fisso" },
+        { "id": "rh",   "codice": "R H",      "nome": "Partecipazioni",                             "tariffa": 28.83,  "modalita": "perRiga" },
+        { "id": "ri",   "codice": "R I",      "nome": "Capitali",                                   "tariffa": 7.22,   "modalita": "perRiga" },
+        { "id": "rl",   "codice": "R L",      "nome": "Redditi diversi",                            "tariffa": 14.42,  "modalita": "fisso" },
+        { "id": "rm",   "codice": "R M",      "nome": "Redditi tassazione separata",                "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "rp",   "codice": "R P",      "nome": "Oneri deducibili / detraibili",              "tariffa": 7.22,   "modalita": "perRiga" },
+        { "id": "rr",   "codice": "R R",      "nome": "Contributi previdenziali",                   "tariffa": 28.83,  "modalita": "fisso" },
+        { "id": "ru",   "codice": "RU",       "nome": "Crediti d'imposta",                          "tariffa": 28.83,  "modalita": "perSezione" },
+        { "id": "ec",   "codice": "EC",       "nome": "Deduzioni extra contabili componenti negativi","tariffa": 106.02, "modalita": "fisso" }
+      ]
+    },
+    "usp": {
+      "etichetta": "Modello Unico Società di Persone",
+      "voci": [
+        { "id": "base", "codice": "BASE",      "nome": "Quadri base (RN/Oneri/Familiari a carico)", "tariffa": 73.09,  "modalita": "fisso" },
+        { "id": "ra",   "codice": "R A",       "nome": "Terreni",                                    "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "rb",   "codice": "R B",       "nome": "Fabbricati",                                 "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "re1",  "codice": "R E sez.1", "nome": "Reddito Professionista",                     "tariffa": 289.24, "modalita": "fisso" },
+        { "id": "re2",  "codice": "R E sez.2", "nome": "Co.co.co. e altri",                          "tariffa": 57.65,  "modalita": "fisso" },
+        { "id": "rf",   "codice": "R F",       "nome": "Reddito impresa ordinario",                  "tariffa": 361.29, "modalita": "fisso" },
+        { "id": "rg",   "codice": "R G",       "nome": "Reddito impresa semplificato",               "tariffa": 289.24, "modalita": "fisso" },
+        { "id": "rh",   "codice": "R H",       "nome": "Partecipazioni",                             "tariffa": 28.83,  "modalita": "perRiga" },
+        { "id": "ri",   "codice": "R I",       "nome": "Capitali",                                   "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "rl",   "codice": "R L",       "nome": "Redditi diversi",                            "tariffa": 28.83,  "modalita": "fisso" },
+        { "id": "rk",   "codice": "R K",       "nome": "Elenco soci",                                "tariffa": 43.23,  "modalita": "fisso" },
+        { "id": "rm",   "codice": "R M",       "nome": "Redditi tassazione separata",                "tariffa": 58.68,  "modalita": "fisso" },
+        { "id": "ru",   "codice": "R U",       "nome": "Crediti d'imposta",                          "tariffa": 28.83,  "modalita": "perSezione" },
+        { "id": "rw",   "codice": "R W",       "nome": "Trasferimenti esteri",                       "tariffa": 23.68,  "modalita": "fisso" },
+        { "id": "ec",   "codice": "EC",        "nome": "Deduzioni extra contabili componenti negativi","tariffa": 106.02, "modalita": "fisso" },
+        { "id": "irp",  "codice": "IRP",       "nome": "Quadro IRAP",                                "tariffa": 108.09, "modalita": "fisso" }
+      ]
+    },
+    "usc": {
+      "etichetta": "Modello Unico Società di Capitali",
+      "voci": [
+        { "id": "base", "codice": "BASE",  "nome": "Quadri base (RN/Oneri/Familiari a carico)",   "tariffa": 73.09,  "modalita": "fisso" },
+        { "id": "te",   "codice": "T E",   "nome": "Terreni",                                      "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "fa",   "codice": "F A",   "nome": "Fabbricati",                                   "tariffa": 14.42,  "modalita": "perRiga" },
+        { "id": "rf",   "codice": "R F",   "nome": "Reddito impresa ordinario",                    "tariffa": 361.29, "modalita": "fisso" },
+        { "id": "rh",   "codice": "R H",   "nome": "Partecipazioni",                               "tariffa": 28.83,  "modalita": "perRiga" },
+        { "id": "ri",   "codice": "R I",   "nome": "Capitali",                                     "tariffa": 28.83,  "modalita": "perRiga" },
+        { "id": "rs",   "codice": "R S",   "nome": "Dati di bilancio / Prospetto crediti",         "tariffa": 43.23,  "modalita": "fisso" },
+        { "id": "ru",   "codice": "RU",    "nome": "Crediti d'imposta",                            "tariffa": 28.83,  "modalita": "perSezione" },
+        { "id": "ry",   "codice": "R Y",   "nome": "Imposta sostitutiva",                          "tariffa": 28.83,  "modalita": "fisso" },
+        { "id": "ec",   "codice": "EC",    "nome": "Deduzioni extra contabili componenti negativi","tariffa": 162.64, "modalita": "fisso" },
+        { "id": "tn",   "codice": "TN",    "nome": "Imputazione reddito/perdita (trasparenza)",    "tariffa": 106.02, "modalita": "fisso" },
+        { "id": "irp",  "codice": "IRP",   "nome": "Quadro IRAP",                                  "tariffa": 144.11, "modalita": "fisso" }
+      ]
+    }
+  },
+
+  "bilancio": {
+    "etichetta": "Tariffario BILANCIO (art. 22 DM 140/2012, art. 34 Tariffa Dottori Commercialisti)",
+    "ricaviScaglioni": [
+      { "max": 774685.35,    "aliquota": 0.0015,   "etichetta": "Fino a 774.685,35 €" },
+      { "max": 1936713.37,   "aliquota": 0.00075,  "etichetta": "Da 774.685,35 a 1.936.713,37 €" },
+      { "max": 3873426.75,   "aliquota": 0.0004,   "etichetta": "Da 1.936.713,37 a 3.873.426,75 €" },
+      { "max": 7746853.48,   "aliquota": 0.0002,   "etichetta": "Da 3.873.426,75 a 7.746.853,48 €" },
+      { "max": 19367133.72,  "aliquota": 0.000125, "etichetta": "Da 7.746.853,48 a 19.367.133,72 €" },
+      { "max": 38734267.42,  "aliquota": 0.000075, "etichetta": "Da 19.367.133,72 a 38.734.267,42 €" }
+    ],
+    "ricaviOltreUltimoScaglione": 0.00005,
+    "attivoScaglioni": [
+      { "max": 193671.33,    "aliquota": 0.005,    "etichetta": "Fino a 193.671,33 €" },
+      { "max": 387342.67,    "aliquota": 0.0025,   "etichetta": "Da 193.671,33 a 387.342,67 €" },
+      { "max": 774685.35,    "aliquota": 0.00125,  "etichetta": "Da 387.342,67 a 774.685,35 €" },
+      { "max": 1936713.37,   "aliquota": 0.00075,  "etichetta": "Da 774.685,35 a 1.936.713,37 €" },
+      { "max": 3873426.75,   "aliquota": 0.0004,   "etichetta": "Da 1.936.713,37 a 3.873.426,75 €" },
+      { "max": 7746853.48,   "aliquota": 0.00025,  "etichetta": "Da 3.873.426,75 a 7.746.853,48 €" },
+      { "max": 19367133.72,  "aliquota": 0.000125, "etichetta": "Da 7.746.853,48 a 19.367.133,72 €" },
+      { "max": 38734267.42,  "aliquota": 0.00006,  "etichetta": "Da 19.367.133,72 a 38.734.267,42 €" }
+    ],
+    "attivoOltreUltimoScaglione": 0.00005,
+    "minimo": 1188.96,
+    "anno": 2026,
+    "storicoMinimi": [
+      { "anno": 2022, "minimo": 1036.00 },
+      { "anno": 2023, "minimo": 1155.14 },
+      { "anno": 2024, "minimo": 1163.23 },
+      { "anno": 2025, "minimo": 1177.18 },
+      { "anno": 2026, "minimo": 1188.96 }
+    ],
+    "riduzioneImmobiliareMin": 20,
+    "riduzioneImmobiliareMax": 50
+  },
+
+  "consulenza": {
+    "etichetta": "Tariffario CONSULENZA - importo fisso in base allo scaglione di appartenenza",
+    "scaglioni": [
+      { "max": 774685.35,   "tariffa": 1770,  "etichetta": "Fino a 774.685,35 €" },
+      { "max": 1936713.37,  "tariffa": 2355,  "etichetta": "Da 774.685,35 a 1.936.713,37 €" },
+      { "max": 3873426.75,  "tariffa": 3530,  "etichetta": "Da 1.936.713,37 a 3.873.426,75 €" },
+      { "max": 7746853.48,  "tariffa": 5300,  "etichetta": "Da 3.873.426,75 a 7.746.853,48 €" },
+      { "max": 19367133.72, "tariffa": 7060,  "etichetta": "Da 7.746.853,48 a 19.367.133,72 €" },
+      { "max": 38734267.42, "tariffa": 10595, "etichetta": "Da 19.367.133,72 a 38.734.267,42 €" }
+    ]
+  },
+
+  "imu": {
+    "f24": {
+      "base": 22.87,
+      "perImmobile": 3.69,
+      "etichetta": "F24 IMU - per ciascun soggetto"
+    },
+    "dichiarazione": {
+      "base": 37.15,
+      "perImmobile": 15.27,
+      "etichetta": "Dichiarazione IMU - per ciascun comune"
+    }
+  },
+
+  "allegatoA": {
+    "etichetta": "ALLEGATO A - Altri Servizi Contabili",
+    "vigenza": "in vigore dal 01 gennaio 2006",
+    "semplici": [
+      { "id": "variazioniCCIAA",  "nome": "Variazioni dati CAMERA DI COMMERCIO",                "tariffa": 39.00,  "unita": "per pratica" },
+      { "id": "visureCamerali",   "nome": "Visure Camerali Camera di Commercio",                "tariffa": 27.50,  "unita": "per visura" },
+      { "id": "invioBilancioRI",  "nome": "Invio telematico Bilancio al Registro Imprese",      "tariffa": 36.65,  "unita": "per invio" },
+      { "id": "vidimLibri",       "nome": "Predisposizione e vidimazione libri sociali",        "tariffa": 55.00,  "unita": "per libro" },
+      { "id": "variazioniUE",     "nome": "Variazioni dati UFFICIO ENTRATE",                    "tariffa": 39.00,  "unita": "per pratica" },
+      { "id": "iscrizioneINPS",   "nome": "Iscrizione INPS e Albi",                             "tariffa": 55.00,  "unita": "per iscrizione" },
+      { "id": "ravvedimenti",     "nome": "Regolarizzazioni e ravvedimenti",                    "tariffa": 55.00,  "unita": "minimo (manuale)" }
+    ],
+    "composte": [
+      { "id": "letteraIntentoUE", "nome": "Lettere d'intento Ufficio Entrate",                  "base": 25.45, "perUnita": 5.10, "etichettaUnita": "per fornitore" },
+      { "id": "intrastat",        "nome": "Modello Intrastat",                                  "base": 51.00, "perUnita": 2.00, "etichettaUnita": "per documento aggiuntivo (incluso 1 nella base)" }
+    ]
+  },
+
+  "vociCustom": []
+}

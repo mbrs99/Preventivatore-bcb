@@ -1,0 +1,17 @@
+node_modules/
+dist/
+release/
+*.log
+.DS_Store
+Thumbs.db
+
+# Cartelle dati runtime (create dall'app stessa)
+/Clienti/
+/Tariffario/
+/Codice/
+
+# File temporanei editor / OS
+*.swp
+*~
+.vscode/
+.idea/

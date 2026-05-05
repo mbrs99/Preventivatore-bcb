@@ -1,0 +1,95 @@
+{
+  "name": "preventivatore-bcb",
+  "productName": "Preventivatore BCB",
+  "version": "1.0.0",
+  "description": "Preventivatore Studio Commercialista BCB — app desktop portable",
+  "main": "src/main.js",
+  "author": {
+    "name": "Studio Commercialista BCB"
+  },
+  "scripts": {
+    "dev": "npm run build:renderer && electron .",
+    "build:renderer": "vite build",
+    "pack:mac": "npm run build:renderer && electron-builder --mac --publish=never",
+    "pack:win": "npm run build:renderer && electron-builder --win --publish=never",
+    "pack:linux": "npm run build:renderer && electron-builder --linux --publish=never",
+    "pack:all": "npm run build:renderer && electron-builder --mac --win --linux --publish=never",
+    "pack:current": "npm run build:renderer && electron-builder --publish=never"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^6.0.1"
+  },
+  "build": {
+    "appId": "com.bcb.preventivatore",
+    "productName": "Preventivatore BCB",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/main.js",
+      "src/preload.js",
+      "src/home.html",
+      "src/home.js",
+      "src/shared/**/*",
+      "dist/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": ["**/*"]
+      }
+    ],
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["universal"] },
+        { "target": "zip", "arch": ["universal"] }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "artifactName": "Preventivatore-BCB-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Preventivatore BCB",
+      "artifactName": "Preventivatore-BCB-${version}-mac-${arch}.dmg",
+      "writeUpdateInfo": false
+    },
+    "win": {
+      "target": [
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Preventivatore-BCB-${version}-Windows-Portable.exe"
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.png",
+      "category": "Office",
+      "synopsis": "Preventivatore Studio Commercialista BCB",
+      "description": "App desktop per la generazione di preventivi e lettere di incarico — Studio Commercialista BCB",
+      "artifactName": "Preventivatore-BCB-${version}-Linux-${arch}.AppImage"
+    },
+    "appImage": {
+      "license": null
+    },
+    "asar": true
+  }
+}
