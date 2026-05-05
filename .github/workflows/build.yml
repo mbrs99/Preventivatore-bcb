@@ -23,6 +23,11 @@ on:
     tags: ['v*']
   workflow_dispatch:  # permette esecuzione manuale dal sito GitHub
 
+# Silenzia gli avvisi di deprecazione Node.js 20: forza tutte le actions
+# a girare su Node.js 24 (raccomandazione ufficiale di GitHub).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     strategy:
