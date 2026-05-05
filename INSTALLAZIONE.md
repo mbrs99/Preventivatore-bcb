@@ -41,13 +41,8 @@ xattr -d com.apple.quarantine "/Applications/Preventivatore BCB.app"
 
 L'app si lancia direttamente dal file `.exe`, non c'è un'installazione vera
 e propria. Puoi mettere il file dove vuoi (Desktop, Documenti, una cartella
-sul disco).
-
-### Suggerimento: cartella dedicata
-
-Crea una cartella `Preventivatore BCB` (es. in Documenti), metti dentro il
-`.exe`. L'app creerà al primo avvio le sottocartelle `Clienti/`, `Tariffario/`
-nella stessa posizione del `.exe`. Tutto resta lì.
+sul disco). I tuoi dati (clienti, tariffario) vengono comunque salvati in
+`Documenti\Preventivatore BCB\` indipendentemente da dove hai messo il `.exe`.
 
 ---
 
@@ -69,21 +64,25 @@ chmod +x Preventivatore-BCB-*.AppImage
 
 ## Cosa fa l'app al primo avvio
 
-Crea automaticamente, nella stessa cartella dove hai messo l'app, queste
-sottocartelle:
+Crea automaticamente la cartella `Preventivatore BCB` dentro **Documenti**
+del tuo utente. Indipendentemente da dove hai messo il file dell'app:
 
 ```
-[la tua cartella]
-├── Preventivatore BCB.app    ← (Mac) o .exe (Win) o .AppImage (Linux)
-├── Clienti/                  ← i tuoi clienti, un file .json per cliente
-├── Tariffario/               ← il tariffario in uso (modificabile dall'editor)
-│   └── tariffario_attivo.json
-└── Codice/                   ← cartella ausiliaria (di solito vuota)
+Documenti/Preventivatore BCB/        ← Mac e Linux
+[Documenti]\Preventivatore BCB\      ← Windows
+├── Clienti/                         ← un file .json per ogni cliente
+│   └── LEGGIMI.txt
+├── Tariffario/                      ← il tariffario in uso
+│   ├── tariffario_attivo.json
+│   └── storico/                     ← versioni precedenti del tariffario
+└── Codice/                          ← cartella ausiliaria (di solito vuota)
 ```
 
 **Tutto resta sul tuo disco**: niente cloud, niente account, niente login.
-Per spostare i tuoi clienti su un altro computer, basta copiare la cartella
-`Clienti/` (o usare il bottone "Esporta lista clienti" dell'app).
+Per spostare i tuoi dati su un altro computer hai due strade:
+- Dalla home dell'app: "Esporta lista clienti" → manda il file all'altro PC
+  → "Importa lista clienti" lì.
+- Manuale: copia l'intera cartella `Documenti/Preventivatore BCB/` sull'altro PC.
 
 ---
 
@@ -93,12 +92,11 @@ Quando ricevi una nuova versione:
 
 1. **Chiudi** il Preventivatore se è aperto.
 2. **Sostituisci** il vecchio file (`.app`, `.exe`, `.AppImage`) con quello nuovo.
-3. **Lascia intatte** le cartelle `Clienti/`, `Tariffario/`, `Codice/`. Hanno i
-   tuoi dati e l'app nuova li userà direttamente.
-4. Riapri l'app.
+3. Riapri l'app.
 
 Le tue informazioni (clienti, tariffario personalizzato) **non vengono
-toccate** dall'aggiornamento.
+toccate** dall'aggiornamento — vivono in `Documenti/Preventivatore BCB/`,
+non nel file dell'app, quindi sopravvivono a qualsiasi sostituzione.
 
 ---
 
@@ -136,12 +134,10 @@ sudo dnf install fuse-libs    # Fedora
 
 ### Tutti i sistemi: "L'app non vede i miei vecchi clienti"
 
-L'app cerca i clienti nella cartella **accanto** al file dell'app (sullo
-stesso livello di percorso). Se hai spostato l'app ma non la cartella
-`Clienti/`, devi spostarle entrambe insieme.
-
-In alternativa, usa il bottone **"Importa lista clienti"** dalla home
-dell'app per caricare un export precedente.
+L'app cerca i clienti in `Documenti/Preventivatore BCB/Clienti/`. Se hai
+cambiato computer, copia quella cartella dal vecchio PC al nuovo (stesso
+percorso). In alternativa, usa il bottone **"Importa lista clienti"** dalla
+home dell'app per caricare un export precedente.
 
 ---
 

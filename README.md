@@ -35,28 +35,30 @@ L'editor è una **finestra completamente nuova** che permette di modificare TUTT
 
 ### Dove vengono salvati i dati
 
-I dati (clienti, tariffario, codice) vengono salvati in **cartelle accanto all'app**, non dentro il sistema operativo. Questo vuol dire che se sposti l'app su una chiavetta USB o un altro computer, i dati vengono con te.
+I dati (clienti, tariffario, codice) vengono salvati nella cartella
+**Documenti/Preventivatore BCB/** dell'utente, indipendentemente da dove
+hai messo l'app stessa. Questa scelta garantisce che i dati siano sempre
+in una posizione scrivibile e standard, su tutti e tre i sistemi.
 
-Struttura sul disco (una volta compilata l'app):
+Struttura sul disco:
 
 ```
-Preventivatore BCB/              ← cartella che puoi mettere dove vuoi
-├── Preventivatore BCB.app       ← (Mac) l'icona che si clicca
-├── Preventivatore-BCB-Portable.exe  ← (Windows) l'eseguibile
-├── Clienti/                     ← tutti i clienti (ogni .json è un cliente)
+~/Documenti/Preventivatore BCB/         ← Mac/Linux
+C:\Users\<user>\Documenti\Preventivatore BCB\   ← Windows
+├── Clienti/                            ← tutti i clienti (un .json ciascuno)
 │   ├── cliente__abc123.json
 │   └── ...
-├── Tariffario/                  ← tariffario in uso
-│   ├── tariffario_attivo.json   ← ⭐ il file modificato dall'editor
-│   └── storico/                 ← snapshot delle versioni precedenti
-│   ├── cliente__def456.json
-│   ├── tariffario_bcb.json
-│   ├── ui_theme.json
-│   └── LEGGIMI.txt
-├── Tariffario/                  ← i .xls del tariffario
-│   └── tariffario_BCB_2026.xls
-└── Codice/                      ← file operativi (facoltativo)
+├── Tariffario/                         ← tariffario in uso
+│   ├── tariffario_attivo.json          ← ⭐ modificabile dall'editor
+│   └── storico/                        ← snapshot delle versioni precedenti
+└── Codice/                             ← cartella ausiliaria (di solito vuota)
 ```
+
+Per spostare i dati su un altro computer:
+- **Metodo veloce**: dalla home dell'app, "Esporta lista clienti" → mandi
+  il file `.bcbexport.json` all'altro PC → "Importa lista clienti" lì
+- **Metodo manuale**: copia l'intera cartella `Documenti/Preventivatore BCB/`
+  sull'altro PC, sovrascrivendo quella esistente
 
 ---
 

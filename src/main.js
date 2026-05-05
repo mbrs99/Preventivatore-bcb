@@ -14,40 +14,37 @@ const path = require('path');
 const fs = require('fs');
 const fsp = require('fs').promises;
 
-/* ---------------- Path risoluzione portabile ------------------- */
-// Vogliamo che cartelle dati (Clienti, Tariffario, Codice) siano ACCANTO
-// all'app, non dentro il bundle. In questo modo:
-//  - Su Mac: accanto a Preventivatore.app (nella cartella genitore)
-//  - Su Windows: accanto a Preventivatore.exe (stessa cartella)
-//  - In sviluppo (npm run dev): nella root del progetto
-//
-// Questo garantisce che copiando l'intera cartella "Preventivatore/"
-// su un altro computer, tutti i dati vengano con te.
+/* ---------------- Path risoluzione dei dati persistenti ----------
+ *
+ * Strategia: i dati (Clienti, Tariffario, Codice) vivono nella cartella
+ *   Documenti/Preventivatore BCB/
+ * dell'utente, su tutti e tre i sistemi:
+ *   - Mac:     ~/Documenti/Preventivatore BCB/   (oppure ~/Documents/...)
+ *   - Windows: C:\Users\<user>\Documenti\Preventivatore BCB\
+ *   - Linux:   ~/Documenti/Preventivatore BCB/   (XDG_DOCUMENTS_DIR se settato)
+ *
+ * Questa scelta risolve il conflitto con macOS AppTranslocation (che
+ * esegue le app non firmate da una sandbox read-only), assicurando una
+ * cartella sempre scrivibile e una posizione standard riconoscibile.
+ *
+ * In modalità sviluppo (npm run dev) la root resta nel progetto, così
+ * non si "inquina" Documenti durante test.
+ */
 
-function getPortableRoot() {
+function getDataRoot() {
   if (!app.isPackaged) {
-    // Modalità sviluppo: la root è la directory del progetto
+    // Modalità sviluppo: la root è la directory del progetto (legacy behavior)
     return app.getAppPath();
   }
-
-  // Produzione: risali dal .app / .exe alla cartella contenitrice
-  const execPath = process.execPath;
-
-  if (process.platform === 'darwin') {
-    // process.execPath = .../Preventivatore BCB.app/Contents/MacOS/Preventivatore BCB
-    // Risalire 4 livelli: MacOS -> Contents -> .app -> cartella contenitore
-    return path.resolve(execPath, '..', '..', '..', '..');
-  } else {
-    // Windows/Linux: accanto al .exe
-    return path.dirname(execPath);
-  }
+  // Produzione su tutti gli OS: <Documenti>/Preventivatore BCB/
+  return path.join(app.getPath('documents'), 'Preventivatore BCB');
 }
 
-const PORTABLE_ROOT = getPortableRoot();
-const CLIENTI_DIR   = path.join(PORTABLE_ROOT, 'Clienti');
-const TARIFFARIO_DIR = path.join(PORTABLE_ROOT, 'Tariffario');
+const DATA_ROOT      = getDataRoot();
+const CLIENTI_DIR    = path.join(DATA_ROOT, 'Clienti');
+const TARIFFARIO_DIR = path.join(DATA_ROOT, 'Tariffario');
 const STORICO_DIR    = path.join(TARIFFARIO_DIR, 'storico');
-const CODICE_DIR    = path.join(PORTABLE_ROOT, 'Codice');
+const CODICE_DIR     = path.join(DATA_ROOT, 'Codice');
 
 // File principale del tariffario "in uso" (modificato dall'editor)
 const TARIFFARIO_FILE = path.join(TARIFFARIO_DIR, 'tariffario_attivo.json');
@@ -58,7 +55,7 @@ function getDefaultTariffarioPath() {
   return path.join(__dirname, 'shared', 'tariffario-default.json');
 }
 
-console.log('[Preventivatore] Portable root:', PORTABLE_ROOT);
+console.log('[Preventivatore] Data root:', DATA_ROOT);
 console.log('[Preventivatore] Clienti dir:', CLIENTI_DIR);
 console.log('[Preventivatore] Tariffario file:', TARIFFARIO_FILE);
 
@@ -180,7 +177,7 @@ ipcMain.handle('shell:openFolder', async (_, which) => {
     clienti: CLIENTI_DIR,
     tariffario: TARIFFARIO_DIR,
     codice: CODICE_DIR,
-    root: PORTABLE_ROOT,
+    root: DATA_ROOT,
   };
   const target = map[which];
   if (!target) return { ok: false, error: 'cartella sconosciuta' };
@@ -503,7 +500,7 @@ ipcMain.handle('app:openEditor', () => {
 
 ipcMain.handle('app:getPaths', () => {
   return {
-    root: PORTABLE_ROOT,
+    root: DATA_ROOT,
     clienti: CLIENTI_DIR,
     tariffario: TARIFFARIO_DIR,
     codice: CODICE_DIR,
