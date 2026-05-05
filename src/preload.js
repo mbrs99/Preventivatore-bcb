@@ -49,9 +49,10 @@ contextBridge.exposeInMainWorld('tariffarioAPI', {
 
 // window.authAPI — gestione del lock con password remota (modalità STRICT)
 contextBridge.exposeInMainWorld('authAPI', {
-  unlock:        (password) => ipcRenderer.invoke('auth:unlock', password),
-  isUnlocked:    ()         => ipcRenderer.invoke('auth:isUnlocked'),
-  hashPassword:  (plain)    => ipcRenderer.invoke('auth:hashPassword', plain),
+  unlock:           (password) => ipcRenderer.invoke('auth:unlock', password),
+  isUnlocked:       ()         => ipcRenderer.invoke('auth:isUnlocked'),
+  hashPassword:     (plain)    => ipcRenderer.invoke('auth:hashPassword', plain),
+  getRevokeReason:  ()         => ipcRenderer.invoke('auth:getRevokeReason'),
 });
 
 // Debug: segnala al renderer che l'ambiente Electron è caricato

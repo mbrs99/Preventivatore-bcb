@@ -128,6 +128,11 @@
       Inserisci la password fornita dallo Studio per accedere all'applicazione.
     </p>
 
+    <div id="revokeBanner" class="error" style="display:none; text-align:left;">
+      <strong id="revokeBannerTitle"></strong>
+      <div id="revokeBannerMsg" style="margin-top:6px; font-size:12px; font-weight:400;"></div>
+    </div>
+
     <form id="authForm" autocomplete="off">
       <label for="pwd">Password</label>
       <div class="row">
@@ -163,6 +168,28 @@
     showPwdChk.addEventListener('change', (e) => {
       pwdInput.type = e.target.checked ? 'text' : 'password';
     });
+
+    // Se la finestra è stata aperta a seguito di un lockout live (Marco
+    // ha cambiato password / attivato killSwitch mentre l'app era in uso),
+    // mostra un banner informativo prima del campo password.
+    (async () => {
+      try {
+        const result = await window.authAPI.getRevokeReason();
+        const reason = result && result.reason;
+        if (!reason) return;
+        const banner = document.getElementById('revokeBanner');
+        const title  = document.getElementById('revokeBannerTitle');
+        const msg    = document.getElementById('revokeBannerMsg');
+        if (reason === 'killSwitch') {
+          title.textContent = '🔒 Accesso disattivato';
+          msg.textContent   = 'Lo Studio ha disattivato temporaneamente l’accesso a tutte le installazioni. Riprova più tardi o contatta lo Studio.';
+        } else if (reason === 'password-revoked') {
+          title.textContent = '🔄 Password aggiornata';
+          msg.textContent   = 'La password è stata aggiornata dallo Studio. Inserisci la nuova password che ti è stata comunicata.';
+        }
+        banner.style.display = 'block';
+      } catch {}
+    })();
 
     function showError(msg) {
       errorBox.textContent = msg;

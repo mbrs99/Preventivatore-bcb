@@ -89,7 +89,15 @@ function fetchUrlAsString(url, timeoutMs = 5000) {
 // Modalità STRICT: niente stato persistente di unlock.
 // Ogni tentativo di sblocco fa un fetch live del Gist. Nessuna cache
 // dell'unlock. L'app si chiude quando non è più sbloccata.
-let unlockedThisSession = false;
+//
+// LIVE REVOKE: dopo un unlock, partono dei controlli periodici contro
+// il Gist (ogni 30s). Se Marco modifica killSwitch=true o rimuove
+// l'hash della password attualmente in uso, l'utente viene sloggato
+// entro pochi secondi senza dover riavviare l'app.
+let currentUnlockHash = null;        // hash con cui è stato fatto l'ultimo unlock
+let revokeCheckInterval = null;      // setInterval handle
+let lastRevokeReason = null;         // 'killSwitch' | 'password-revoked' | null
+const REVOKE_CHECK_INTERVAL_MS = 30 * 1000;  // 30 secondi
 
 // Fetcha la lista live dal Gist. Restituisce {validHashes, killSwitch}
 // oppure lancia un'eccezione se la fetch fallisce.
@@ -100,6 +108,51 @@ async function fetchAuthListLive(timeoutMs = 8000) {
     validHashes: Array.isArray(data.validHashes) ? data.validHashes : [],
     killSwitch:  !!data.killSwitch,
   };
+}
+
+// Avvia il polling periodico del Gist. Se rileva una revoca della
+// password corrente o un killSwitch attivato, sblocca l'utente in tempo
+// reale (sgancia la home, riapre la schermata di password con messaggio).
+function startRevokeCheck() {
+  stopRevokeCheck();
+  revokeCheckInterval = setInterval(async () => {
+    try {
+      const live = await fetchAuthListLive(8000);
+      if (live.killSwitch) {
+        triggerLockout('killSwitch');
+      } else if (currentUnlockHash && !live.validHashes.includes(currentUnlockHash)) {
+        triggerLockout('password-revoked');
+      }
+    } catch (err) {
+      // Fetch fallita (es. offline transitorio) — non revochiamo,
+      // l'utente resta dentro. Riproveremo al prossimo ciclo.
+      console.warn('[auth] Live check fallito (mantengo sessione):', err.message);
+    }
+  }, REVOKE_CHECK_INTERVAL_MS);
+}
+
+function stopRevokeCheck() {
+  if (revokeCheckInterval) {
+    clearInterval(revokeCheckInterval);
+    revokeCheckInterval = null;
+  }
+}
+
+// Logout immediato: sgancia la home, mostra di nuovo la schermata
+// password con un messaggio che spiega perché.
+function triggerLockout(reason) {
+  console.log('[auth] Accesso revocato remotamente — motivo:', reason);
+  currentUnlockHash = null;
+  lastRevokeReason = reason;
+  stopRevokeCheck();
+  // Apri prima la finestra auth (così l'app non si chiude col window-all-closed)
+  if (!authWindow) createAuthWindow();
+  // Poi chiudi tutte le altre finestre
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (w !== authWindow) {
+      try { w.close(); } catch {}
+    }
+  }
 }
 
 /* ---------------- Path risoluzione dei dati persistenti ----------
@@ -484,7 +537,16 @@ ipcMain.handle('tariffario:saveBuffer', async (_, { path: filePath, buffer }) =>
 /* ---------------- IPC Handlers: auth (lock con password STRICT) -- */
 
 ipcMain.handle('auth:isUnlocked', async () => {
-  return { ok: true, unlocked: unlockedThisSession };
+  return { ok: true, unlocked: !!currentUnlockHash };
+});
+
+// Restituisce e CONSUMA il motivo dell'ultimo lockout (per mostrare
+// nella schermata di password un messaggio "il tuo accesso è stato
+// revocato" anziché solo la richiesta password generica).
+ipcMain.handle('auth:getRevokeReason', async () => {
+  const reason = lastRevokeReason;
+  lastRevokeReason = null;
+  return { ok: true, reason };
 });
 
 // STRICT unlock: ogni tentativo fa un fetch live del Gist.
@@ -509,7 +571,9 @@ ipcMain.handle('auth:unlock', async (_, password) => {
   }
   for (const stored of live.validHashes) {
     if (verifyPasswordAgainstStored(password, stored)) {
-      unlockedThisSession = true;
+      currentUnlockHash = stored;
+      // Avvia il polling LIVE per rilevare cambio password / killSwitch
+      startRevokeCheck();
       // Apri la home e chiudi la finestra di auth
       if (authWindow) {
         const w = authWindow;
@@ -589,11 +653,16 @@ function createHomeWindow() {
   // figlie aperte per garantire un quit pulito.
   homeWindow.on('closed', () => {
     homeWindow = null;
-    unlockedThisSession = false;
-    for (const w of BrowserWindow.getAllWindows()) {
-      try { w.close(); } catch {}
+    currentUnlockHash = null;
+    stopRevokeCheck();
+    // Se c'è già una authWindow aperta (caso: lockout live), non quittare.
+    // Altrimenti l'utente ha chiuso volontariamente → quit dell'app.
+    if (!authWindow) {
+      for (const w of BrowserWindow.getAllWindows()) {
+        try { w.close(); } catch {}
+      }
+      app.quit();
     }
-    app.quit();
   });
 
   // In modalità sviluppo, apri DevTools
@@ -689,13 +758,15 @@ ipcMain.handle('app:getPaths', () => {
 app.whenReady().then(async () => {
   await ensureDataFolders();
   // STRICT: ogni avvio mostra la password. Niente caricamento di stato persistente.
-  unlockedThisSession = false;
+  currentUnlockHash = null;
+  stopRevokeCheck();
   createAuthWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       // Anche per il "click sul dock" su Mac: serve sempre password.
-      unlockedThisSession = false;
+      currentUnlockHash = null;
+      stopRevokeCheck();
       createAuthWindow();
     }
   });
