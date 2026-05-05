@@ -40,13 +40,16 @@ const https = require('https');
 // l'app vede automaticamente la nuova versione al riavvio successivo).
 const AUTH_GIST_URL = 'https://gist.githubusercontent.com/mbrs99/9977a30f9f545c66d50c499f02f4af90/raw/preventivatore-auth.json';
 
-// Lista di hash "di emergenza" embeddati nel binario: usati come ULTIMO
-// fallback se il Gist non è raggiungibile e nemmeno la cache locale.
-// Garantisce che la primissima apertura dopo l'installazione funzioni
-// anche senza connessione. Marco può cambiare questa password tramite
-// il Gist senza dover rilasciare una nuova versione del binario.
+// Lista di hash "di emergenza" embeddati nel binario.
+// REGOLA: questa lista NON viene MAI fusa con la lista del Gist o della
+// cache. È usata SOLO come ultima ancora di salvezza nel caso edge in
+// cui l'app sia al primissimo avvio E senza connessione E senza cache
+// (utente nuovo che apre l'app per la prima volta offline). Si attiva
+// quando getEffectiveValidHashes() vede una lista altrimenti vuota.
+// Cambiare la password sul Gist invalida correttamente l'unlock locale,
+// indipendentemente da cosa contiene questa lista.
 const AUTH_FALLBACK_HASHES = [
-  // Password iniziale: "studio-bcb-mestre-25"
+  // Password iniziale di "fabbrica": "studio-bcb-mestre-25"
   'ed862ebb9f967a4b420c1fdd20d88a55:ed52291c5d8763dbc3b6410f21985ab97981f3516e80a512a01c2c1199565aadf0611408d350f578dc7cd50d2a45358cd41c06b1fd38a2737a23c06cfbb454fa',
 ];
 
@@ -96,11 +99,20 @@ function fetchUrlAsString(url, timeoutMs = 5000) {
 
 // Modulo auth: stato in memoria + persistenza su disco
 const authState = {
-  validHashes: AUTH_FALLBACK_HASHES.slice(),  // ultima lista nota (default = fallback)
+  validHashes: [],                            // ultima lista nota (vuota all'inizio)
   killSwitch: false,                          // se true, app bloccata sempre
   lastFetchedAt: null,                        // timestamp ultima fetch riuscita
   unlockedHash: null,                         // hash salvato dopo unlock (per ricontrollare validità)
 };
+
+// Restituisce la lista effettiva di hash da usare per la verifica.
+// Solo se non ci sono hash da Gist/cache cade sui fallback embeddati.
+function getEffectiveValidHashes() {
+  if (authState.validHashes && authState.validHashes.length > 0) {
+    return authState.validHashes;
+  }
+  return AUTH_FALLBACK_HASHES;
+}
 
 function getAuthCachePath() {
   // Salvato dentro DATA_ROOT (creato in initAuthCacheFolder)
@@ -111,12 +123,17 @@ async function loadAuthCache() {
   try {
     const txt = await fsp.readFile(getAuthCachePath(), 'utf-8');
     const obj = JSON.parse(txt);
-    if (Array.isArray(obj.validHashes)) authState.validHashes = obj.validHashes;
+    if (Array.isArray(obj.validHashes)) {
+      // Filtra eventuali hash di fallback rimasti in cache da versioni
+      // precedenti dell'app (in cui il merge col fallback era attivo,
+      // bug fix v1.0.3): la cache deve contenere SOLO hash dal Gist.
+      authState.validHashes = obj.validHashes.filter(h => !AUTH_FALLBACK_HASHES.includes(h));
+    }
     if (typeof obj.killSwitch === 'boolean')   authState.killSwitch   = obj.killSwitch;
     if (typeof obj.lastFetchedAt === 'string') authState.lastFetchedAt = obj.lastFetchedAt;
     if (typeof obj.unlockedHash === 'string')  authState.unlockedHash  = obj.unlockedHash;
   } catch {
-    // Cache assente o corrotta — uso il fallback
+    // Cache assente o corrotta — resta vuoto, getEffectiveValidHashes userà il fallback
   }
 }
 
@@ -139,13 +156,13 @@ async function refreshAuthList() {
     const text = await fetchUrlAsString(AUTH_GIST_URL, 5000);
     const data = JSON.parse(text);
     if (Array.isArray(data.validHashes) && data.validHashes.length > 0) {
-      // Aggiungo SEMPRE i fallback in coda (di sicurezza, nel caso
-      // Marco svuoti per errore il Gist rendendo l'app inaccessibile)
-      const merged = data.validHashes.slice();
-      for (const f of AUTH_FALLBACK_HASHES) {
-        if (!merged.includes(f)) merged.push(f);
-      }
-      authState.validHashes = merged;
+      // Sostituisce la lista in modo netto: SOLO ciò che è nel Gist è valido.
+      // Niente fallback aggiunti — quelli sono usati esclusivamente quando
+      // la lista è vuota (vedi getEffectiveValidHashes).
+      // Se Marco svuota il Gist per errore, il check qui sopra
+      // (length > 0) preserva la lista precedente: cioè non si "blocca fuori"
+      // accidentalmente.
+      authState.validHashes = data.validHashes.slice();
     }
     authState.killSwitch    = !!data.killSwitch;
     authState.lastFetchedAt = new Date().toISOString();
@@ -161,7 +178,7 @@ async function refreshAuthList() {
 function isCurrentlyUnlocked() {
   if (authState.killSwitch) return false;
   if (!authState.unlockedHash) return false;
-  return authState.validHashes.includes(authState.unlockedHash);
+  return getEffectiveValidHashes().includes(authState.unlockedHash);
 }
 
 /* ---------------- Path risoluzione dei dati persistenti ----------
@@ -551,7 +568,7 @@ ipcMain.handle('auth:isUnlocked', async () => {
 
 ipcMain.handle('auth:unlock', async (_, password) => {
   if (authState.killSwitch) return { ok: false, killSwitch: true };
-  for (const stored of authState.validHashes) {
+  for (const stored of getEffectiveValidHashes()) {
     if (verifyPasswordAgainstStored(password, stored)) {
       authState.unlockedHash = stored;
       await saveAuthCache();
