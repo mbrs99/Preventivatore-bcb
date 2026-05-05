@@ -147,8 +147,8 @@
     </div>
 
     <p class="footer-note">
-      L'app verifica la password contro un elenco aggiornato gestito dallo Studio.
-      Senza connessione Internet usa l'ultima lista valida ricevuta.
+      L'app verifica la password contro l'elenco aggiornato gestito dallo Studio.
+      Connessione Internet richiesta.
     </p>
   </div>
 
@@ -181,27 +181,38 @@
 
       submitBtn.disabled = true;
       loadingBox.style.display = 'block';
+      loadingBox.textContent = '⏳ Verifica online della password...';
 
       try {
-        // Tenta sempre un refresh della lista prima di verificare,
-        // così Marco può cambiare password e l'utente la vede al primo tentativo.
-        await window.authAPI.refreshList();
+        // L'unlock fa SEMPRE un fetch live dal Gist (no cache). Senza
+        // connessione → result.reason === 'offline'. Cambio password sul
+        // Gist → ha effetto immediato, vecchia password rifiutata.
         const result = await window.authAPI.unlock(pwd);
         if (result && result.ok) {
-          // Sblocco riuscito: il main.js apre la home e chiude questa finestra
           loadingBox.textContent = '✓ Accesso autorizzato. Apertura...';
         } else {
-          showError(
-            result && result.killSwitch
-              ? 'Accesso temporaneamente disattivato dallo Studio. Riprova più tardi.'
-              : 'Password errata. Verifica con lo Studio.'
-          );
+          let msg;
+          switch ((result && result.reason) || '') {
+            case 'offline':
+              msg = result.message || 'Connessione Internet richiesta.';
+              break;
+            case 'killSwitch':
+              msg = 'Accesso temporaneamente disattivato dallo Studio. Riprova più tardi.';
+              break;
+            case 'no-passwords-configured':
+              msg = 'Lo Studio non ha configurato nessuna password attiva. Contattalo.';
+              break;
+            case 'wrong-password':
+            default:
+              msg = 'Password errata. Verifica con lo Studio.';
+          }
+          showError(msg);
           submitBtn.disabled = false;
           pwdInput.value = '';
           pwdInput.focus();
         }
       } catch (err) {
-        showError('Errore: ' + err.message);
+        showError('Errore inatteso: ' + err.message);
         submitBtn.disabled = false;
       }
     });

@@ -3,14 +3,15 @@
 Guida per gestire l'**accesso al Preventivatore** controllando da remoto chi può
 usare l'app, anche dopo che il file è stato distribuito a terzi.
 
-## Come funziona in 3 righe
+## Come funziona in 4 righe (modalità STRICT, v1.0.4+)
 
-1. L'app, ad ogni avvio, **scarica un file JSON** dal tuo Gist GitHub con
-   la lista delle password valide (in forma di hash).
-2. Quando un utente inserisce la sua password, l'app la confronta con la
-   lista. Se non corrisponde a nessuna → bloccato.
-3. Per **disattivare** una password, rimuovi il suo hash dal Gist. Al
-   prossimo avvio dell'app, chi aveva quella password viene bloccato.
+1. L'app, **ad ogni avvio**, mostra una schermata di password. Niente unlock
+   ricordato — sempre richiesta esplicita.
+2. Ogni tentativo di sblocco fa un **fetch live** del Gist (no cache offline).
+   Se l'utente non è connesso a Internet, l'app non si sblocca.
+3. La password digitata viene confrontata con la lista del Gist. Match → entra.
+4. Per **disattivare** una password, rimuovi il suo hash dal Gist. **Subito**:
+   chi aveva quella password viene bloccato al prossimo avvio.
 
 ---
 
@@ -124,12 +125,12 @@ La via è:
 
 ### Cosa succede se l'utente è offline?
 
-L'app usa l'**ultima lista valida** scaricata in passato (cache locale).
-Quindi un utente offline continua a usare la password attuale.
+In modalità STRICT (v1.0.4+) l'app **non si sblocca senza connessione
+Internet**. Mostra il messaggio "Connessione Internet richiesta" e l'utente
+non può procedere finché non torna online.
 
-**Conseguenza**: se l'utente non si connette MAI ad Internet, non saprai mai
-quando ha smesso di funzionare. Per la stragrande maggioranza dei PC questo
-non è un problema (sono sempre online).
+Questo è voluto: l'app deve sempre verificare contro la lista live nel
+Gist, così non è possibile usare l'app con una password obsoleta.
 
 ### Quanto è sicura la password?
 

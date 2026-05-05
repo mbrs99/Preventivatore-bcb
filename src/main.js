@@ -17,22 +17,19 @@ const crypto = require('crypto');
 const https = require('https');
 
 /* ================================================================
-   AUTH — gestione lock dell'app con password remota
+   AUTH — gestione lock dell'app con password remota (modalità STRICT)
 
-   Schema:
-   - L'app fetcha periodicamente da AUTH_GIST_URL una lista di hash
-     di password "valide" (gestita da Marco via Gist).
-   - L'utente sblocca inserendo una password che corrisponde a uno
-     degli hash. L'unlock viene memorizzato localmente.
-   - Se Marco rimuove un hash dalla lista, al prossimo avvio l'app
-     vede che l'unlock locale non è più valido e blocca tutto.
-   - Funzionamento offline: usa la cache dell'ultima lista valida.
-
-   Marco non conosce nessuna password in chiaro: nel Gist ci sono solo
-   gli hash (formato scrypt: "<salt>:<derivedKey>"). Quando vuole
-   cambiare password, genera un nuovo hash con il bottone "Genera
-   hash" nella schermata di sblocco (visibile solo se l'app è
-   già sbloccata) o col tool da terminale tools/genera-hash.mjs.
+   Schema della modalità strict (v1.0.4+):
+   - L'app NON ricorda mai un unlock precedente: ogni avvio richiede
+     una nuova autenticazione tramite la schermata di password.
+   - L'app NON usa cache offline per la verifica della password:
+     ogni tentativo di unlock fa un fetch fresco dal Gist. Senza
+     connessione → impossibile sbloccare.
+   - Il cambio password sul Gist ha effetto IMMEDIATO al prossimo
+     riavvio (anche dopo ore: l'utente non vede mai una versione
+     "stantia" della lista perché c'è sempre un fetch live).
+   - Quando si chiudono tutte le finestre, l'app si chiude — il
+     prossimo lancio richiede di nuovo password.
    ================================================================ */
 
 // URL del Gist di Marco — versione "stabile" senza commit SHA, così punta
@@ -40,18 +37,10 @@ const https = require('https');
 // l'app vede automaticamente la nuova versione al riavvio successivo).
 const AUTH_GIST_URL = 'https://gist.githubusercontent.com/mbrs99/9977a30f9f545c66d50c499f02f4af90/raw/preventivatore-auth.json';
 
-// Lista di hash "di emergenza" embeddati nel binario.
-// REGOLA: questa lista NON viene MAI fusa con la lista del Gist o della
-// cache. È usata SOLO come ultima ancora di salvezza nel caso edge in
-// cui l'app sia al primissimo avvio E senza connessione E senza cache
-// (utente nuovo che apre l'app per la prima volta offline). Si attiva
-// quando getEffectiveValidHashes() vede una lista altrimenti vuota.
-// Cambiare la password sul Gist invalida correttamente l'unlock locale,
-// indipendentemente da cosa contiene questa lista.
-const AUTH_FALLBACK_HASHES = [
-  // Password iniziale di "fabbrica": "studio-bcb-mestre-25"
-  'ed862ebb9f967a4b420c1fdd20d88a55:ed52291c5d8763dbc3b6410f21985ab97981f3516e80a512a01c2c1199565aadf0611408d350f578dc7cd50d2a45358cd41c06b1fd38a2737a23c06cfbb454fa',
-];
+// In modalità STRICT non ci sono fallback hash embeddati: la verifica
+// della password avviene SEMPRE contro il Gist live. Niente backup
+// offline = nessun valore "di fabbrica" da cui rientrare.
+const AUTH_FALLBACK_HASHES = []; // intenzionalmente vuoto in v1.0.4+
 
 // Calcolo hash scrypt (salt+key). Formato stored: "<salt-hex>:<hash-hex>"
 function hashPasswordSync(plaintext, saltBuf = null) {
@@ -97,88 +86,20 @@ function fetchUrlAsString(url, timeoutMs = 5000) {
   });
 }
 
-// Modulo auth: stato in memoria + persistenza su disco
-const authState = {
-  validHashes: [],                            // ultima lista nota (vuota all'inizio)
-  killSwitch: false,                          // se true, app bloccata sempre
-  lastFetchedAt: null,                        // timestamp ultima fetch riuscita
-  unlockedHash: null,                         // hash salvato dopo unlock (per ricontrollare validità)
-};
+// Modalità STRICT: niente stato persistente di unlock.
+// Ogni tentativo di sblocco fa un fetch live del Gist. Nessuna cache
+// dell'unlock. L'app si chiude quando non è più sbloccata.
+let unlockedThisSession = false;
 
-// Restituisce la lista effettiva di hash da usare per la verifica.
-// Solo se non ci sono hash da Gist/cache cade sui fallback embeddati.
-function getEffectiveValidHashes() {
-  if (authState.validHashes && authState.validHashes.length > 0) {
-    return authState.validHashes;
-  }
-  return AUTH_FALLBACK_HASHES;
-}
-
-function getAuthCachePath() {
-  // Salvato dentro DATA_ROOT (creato in initAuthCacheFolder)
-  return path.join(DATA_ROOT, '.auth-cache.json');
-}
-
-async function loadAuthCache() {
-  try {
-    const txt = await fsp.readFile(getAuthCachePath(), 'utf-8');
-    const obj = JSON.parse(txt);
-    if (Array.isArray(obj.validHashes)) {
-      // Filtra eventuali hash di fallback rimasti in cache da versioni
-      // precedenti dell'app (in cui il merge col fallback era attivo,
-      // bug fix v1.0.3): la cache deve contenere SOLO hash dal Gist.
-      authState.validHashes = obj.validHashes.filter(h => !AUTH_FALLBACK_HASHES.includes(h));
-    }
-    if (typeof obj.killSwitch === 'boolean')   authState.killSwitch   = obj.killSwitch;
-    if (typeof obj.lastFetchedAt === 'string') authState.lastFetchedAt = obj.lastFetchedAt;
-    if (typeof obj.unlockedHash === 'string')  authState.unlockedHash  = obj.unlockedHash;
-  } catch {
-    // Cache assente o corrotta — resta vuoto, getEffectiveValidHashes userà il fallback
-  }
-}
-
-async function saveAuthCache() {
-  try {
-    await fsp.mkdir(DATA_ROOT, { recursive: true });
-    await fsp.writeFile(getAuthCachePath(), JSON.stringify({
-      validHashes:    authState.validHashes,
-      killSwitch:     authState.killSwitch,
-      lastFetchedAt:  authState.lastFetchedAt,
-      unlockedHash:   authState.unlockedHash,
-    }, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('[auth] Errore salvataggio cache:', err.message);
-  }
-}
-
-async function refreshAuthList() {
-  try {
-    const text = await fetchUrlAsString(AUTH_GIST_URL, 5000);
-    const data = JSON.parse(text);
-    if (Array.isArray(data.validHashes) && data.validHashes.length > 0) {
-      // Sostituisce la lista in modo netto: SOLO ciò che è nel Gist è valido.
-      // Niente fallback aggiunti — quelli sono usati esclusivamente quando
-      // la lista è vuota (vedi getEffectiveValidHashes).
-      // Se Marco svuota il Gist per errore, il check qui sopra
-      // (length > 0) preserva la lista precedente: cioè non si "blocca fuori"
-      // accidentalmente.
-      authState.validHashes = data.validHashes.slice();
-    }
-    authState.killSwitch    = !!data.killSwitch;
-    authState.lastFetchedAt = new Date().toISOString();
-    await saveAuthCache();
-    console.log('[auth] Lista password aggiornata da Gist (' + authState.validHashes.length + ' hash)');
-    return true;
-  } catch (err) {
-    console.warn('[auth] Fetch fallita:', err.message, '— uso cache/fallback');
-    return false;
-  }
-}
-
-function isCurrentlyUnlocked() {
-  if (authState.killSwitch) return false;
-  if (!authState.unlockedHash) return false;
-  return getEffectiveValidHashes().includes(authState.unlockedHash);
+// Fetcha la lista live dal Gist. Restituisce {validHashes, killSwitch}
+// oppure lancia un'eccezione se la fetch fallisce.
+async function fetchAuthListLive(timeoutMs = 8000) {
+  const text = await fetchUrlAsString(AUTH_GIST_URL, timeoutMs);
+  const data = JSON.parse(text);
+  return {
+    validHashes: Array.isArray(data.validHashes) ? data.validHashes : [],
+    killSwitch:  !!data.killSwitch,
+  };
 }
 
 /* ---------------- Path risoluzione dei dati persistenti ----------
@@ -560,18 +481,35 @@ ipcMain.handle('tariffario:saveBuffer', async (_, { path: filePath, buffer }) =>
   }
 });
 
-/* ---------------- IPC Handlers: auth (lock con password) -------- */
+/* ---------------- IPC Handlers: auth (lock con password STRICT) -- */
 
 ipcMain.handle('auth:isUnlocked', async () => {
-  return { ok: true, unlocked: isCurrentlyUnlocked(), killSwitch: authState.killSwitch };
+  return { ok: true, unlocked: unlockedThisSession };
 });
 
+// STRICT unlock: ogni tentativo fa un fetch live del Gist.
+// Senza connessione → fallisce con reason 'offline'.
+// Cambio password sul Gist → ha effetto immediato, vecchia password rifiutata.
 ipcMain.handle('auth:unlock', async (_, password) => {
-  if (authState.killSwitch) return { ok: false, killSwitch: true };
-  for (const stored of getEffectiveValidHashes()) {
+  let live;
+  try {
+    live = await fetchAuthListLive(8000);
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'offline',
+      message: 'Impossibile contattare il server di autenticazione. Verifica la tua connessione Internet e riprova.',
+    };
+  }
+  if (live.killSwitch) {
+    return { ok: false, reason: 'killSwitch' };
+  }
+  if (live.validHashes.length === 0) {
+    return { ok: false, reason: 'no-passwords-configured' };
+  }
+  for (const stored of live.validHashes) {
     if (verifyPasswordAgainstStored(password, stored)) {
-      authState.unlockedHash = stored;
-      await saveAuthCache();
+      unlockedThisSession = true;
       // Apri la home e chiudi la finestra di auth
       if (authWindow) {
         const w = authWindow;
@@ -582,25 +520,11 @@ ipcMain.handle('auth:unlock', async (_, password) => {
       return { ok: true };
     }
   }
-  return { ok: false };
-});
-
-ipcMain.handle('auth:lock', async () => {
-  authState.unlockedHash = null;
-  await saveAuthCache();
-  // Chiudi tutte le finestre tranne la auth
-  for (const w of BrowserWindow.getAllWindows()) w.close();
-  createAuthWindow();
-  return { ok: true };
+  return { ok: false, reason: 'wrong-password' };
 });
 
 ipcMain.handle('auth:hashPassword', async (_, plain) => {
   return { ok: true, hash: hashPasswordSync(plain) };
-});
-
-ipcMain.handle('auth:refreshList', async () => {
-  const ok = await refreshAuthList();
-  return { ok, lastFetchedAt: authState.lastFetchedAt, count: authState.validHashes.length };
 });
 
 /* ---------------- Finestre ---------------------------------- */
@@ -660,7 +584,17 @@ function createHomeWindow() {
   });
   homeWindow.loadFile(path.join(__dirname, 'home.html'));
 
-  homeWindow.on('closed', () => { homeWindow = null; });
+  // Quando la home si chiude, l'intera sessione finisce: l'utente al
+  // prossimo lancio dovrà rifare la password. Chiudo tutte le finestre
+  // figlie aperte per garantire un quit pulito.
+  homeWindow.on('closed', () => {
+    homeWindow = null;
+    unlockedThisSession = false;
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { w.close(); } catch {}
+    }
+    app.quit();
+  });
 
   // In modalità sviluppo, apri DevTools
   if (!app.isPackaged) {
@@ -754,27 +688,21 @@ ipcMain.handle('app:getPaths', () => {
 
 app.whenReady().then(async () => {
   await ensureDataFolders();
-  // Carica cache auth (lista valida storica + ultimo unlock)
-  await loadAuthCache();
-  // Tenta refresh dalla URL del Gist (non bloccante: timeout 5s, fallback su cache)
-  await refreshAuthList();
-  // Se l'unlock locale è ancora valido contro la lista corrente: apri Home.
-  // Altrimenti: schermata di sblocco.
-  if (isCurrentlyUnlocked()) {
-    createHomeWindow();
-  } else {
-    createAuthWindow();
-  }
+  // STRICT: ogni avvio mostra la password. Niente caricamento di stato persistente.
+  unlockedThisSession = false;
+  createAuthWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      if (isCurrentlyUnlocked()) createHomeWindow();
-      else createAuthWindow();
+      // Anche per il "click sul dock" su Mac: serve sempre password.
+      unlockedThisSession = false;
+      createAuthWindow();
     }
   });
 });
 
+// Quit dell'app quando tutte le finestre vengono chiuse — anche su Mac.
+// In modalità STRICT, la chiusura di tutte le finestre = sessione finita.
 app.on('window-all-closed', () => {
-  // Su Mac le app restano attive anche senza finestre (convenzione)
-  if (process.platform !== 'darwin') app.quit();
+  app.quit();
 });
