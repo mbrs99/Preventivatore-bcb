@@ -68,7 +68,13 @@ function fetchUrlAsString(url, timeoutMs = 5000) {
     if (!url || url.startsWith('PLACEHOLDER')) {
       return reject(new Error('URL Gist non configurato'));
     }
-    const req = https.get(url, { headers: { 'User-Agent': 'PreventivatoreBCB' } }, (res) => {
+    const req = https.get(url, {
+      headers: {
+        'User-Agent':    'PreventivatoreBCB',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma':        'no-cache',
+      },
+    }, (res) => {
       // Segui redirect (es. github → user-content)
       if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
         return resolve(fetchUrlAsString(res.headers.location, timeoutMs));
@@ -99,16 +105,36 @@ let revokeCheckInterval = null;      // setInterval handle
 let lastRevokeReason = null;         // 'killSwitch' | 'password-revoked' | null
 const REVOKE_CHECK_INTERVAL_MS = 30 * 1000;  // 30 secondi
 
-// Fetcha la lista live dal Gist. Restituisce {validHashes, killSwitch}
+// Fetcha la lista live dal Gist. Restituisce {validHashes, killSwitch, requireAuth}
 // oppure lancia un'eccezione se la fetch fallisce.
+//
+// Schema atteso del Gist (preventivatore-auth.json):
+//   {
+//     "validHashes":  [ "<hash1>", ... ],
+//     "killSwitch":   false,
+//     "requireAuth":  true,   // opzionale: se false, l'app salta la password
+//     "lastUpdated":  "..."
+//   }
 async function fetchAuthListLive(timeoutMs = 8000) {
-  const text = await fetchUrlAsString(AUTH_GIST_URL, timeoutMs);
+  // Cache-busting: query string variabile per assicurare un fetch fresco
+  const sep = AUTH_GIST_URL.includes('?') ? '&' : '?';
+  const text = await fetchUrlAsString(AUTH_GIST_URL + sep + 'cb=' + Date.now(), timeoutMs);
   const data = JSON.parse(text);
   return {
     validHashes: Array.isArray(data.validHashes) ? data.validHashes : [],
     killSwitch:  !!data.killSwitch,
+    // requireAuth è OPZIONALE: se assente o non boolean, default = true
+    // (cioè comportamento sicuro: chiediamo password).
+    requireAuth: typeof data.requireAuth === 'boolean' ? data.requireAuth : true,
   };
 }
+
+// Marker speciale per indicare che l'utente è "dentro" l'app perché la
+// modalità remota dice requireAuth=false (e non perché ha inserito una
+// password). Questa distinzione serve al polling: se requireAuth torna
+// a true mentre l'utente è dentro tramite questo marker, lo logghiamo
+// fuori per richiedere la password.
+const NO_AUTH_MARKER = '__no-auth-required__';
 
 // Avvia il polling periodico del Gist. Se rileva una revoca della
 // password corrente o un killSwitch attivato, sblocca l'utente in tempo
@@ -120,8 +146,22 @@ function startRevokeCheck() {
       const live = await fetchAuthListLive(8000);
       if (live.killSwitch) {
         triggerLockout('killSwitch');
-      } else if (currentUnlockHash && !live.validHashes.includes(currentUnlockHash)) {
+        return;
+      }
+      // Se requireAuth è stato attivato (true) mentre l'utente è dentro
+      // SENZA aver inserito una password (NO_AUTH_MARKER), forziamo il
+      // logout per richiedere la password nuova.
+      if (live.requireAuth && currentUnlockHash === NO_AUTH_MARKER) {
+        triggerLockout('auth-required');
+        return;
+      }
+      // Password revocata sul Gist: solo se l'utente aveva fatto unlock
+      // con una password reale (non NO_AUTH_MARKER).
+      if (currentUnlockHash &&
+          currentUnlockHash !== NO_AUTH_MARKER &&
+          !live.validHashes.includes(currentUnlockHash)) {
         triggerLockout('password-revoked');
+        return;
       }
     } catch (err) {
       // Fetch fallita (es. offline transitorio) — non revochiamo,
@@ -755,19 +795,50 @@ ipcMain.handle('app:getPaths', () => {
 
 /* ---------------- Ciclo di vita app ---------------------- */
 
+// Decide quale finestra aprire all'avvio in base allo stato live del Gist:
+//   - killSwitch=true → schermata bloccata con messaggio (no input password)
+//   - requireAuth=false → home diretta, niente password
+//   - default (compreso fetch fallita) → schermata password
+async function decideStartupWindow() {
+  let live;
+  try {
+    live = await fetchAuthListLive(5000);
+  } catch (err) {
+    // Fetch fallita: comportamento sicuro = chiedi password
+    console.warn('[auth] Fetch iniziale fallita, mostro auth window:', err.message);
+    createAuthWindow();
+    return;
+  }
+  if (live.killSwitch) {
+    lastRevokeReason = 'killSwitch';
+    createAuthWindow();
+    return;
+  }
+  if (!live.requireAuth) {
+    // Modalità rilassata: salta password, vai alla home.
+    // Avvio comunque il polling, così se Marco riattiva requireAuth
+    // (o killSwitch / o cambia password) durante l'uso, l'app reagisce.
+    currentUnlockHash = NO_AUTH_MARKER;
+    startRevokeCheck();
+    createHomeWindow();
+    return;
+  }
+  // Default: chiedi password
+  createAuthWindow();
+}
+
 app.whenReady().then(async () => {
   await ensureDataFolders();
-  // STRICT: ogni avvio mostra la password. Niente caricamento di stato persistente.
   currentUnlockHash = null;
   stopRevokeCheck();
-  createAuthWindow();
+  await decideStartupWindow();
 
-  app.on('activate', () => {
+  app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      // Anche per il "click sul dock" su Mac: serve sempre password.
+      // Anche per il "click sul dock" su Mac: serve un nuovo check del Gist.
       currentUnlockHash = null;
       stopRevokeCheck();
-      createAuthWindow();
+      await decideStartupWindow();
     }
   });
 });

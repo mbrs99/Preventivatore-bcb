@@ -54,6 +54,7 @@ usare l'app, anche dopo che il file è stato distribuito a terzi.
     "<hash2>"
   ],
   "killSwitch": false,
+  "requireAuth": true,
   "lastUpdated": "2026-05-15"
 }
 ```
@@ -62,7 +63,24 @@ usare l'app, anche dopo che il file è stato distribuito a terzi.
 |---|---|---|
 | `validHashes` | array di stringhe | hash delle password attualmente attive. Anche solo una è ok. |
 | `killSwitch` | boolean | se `true`, **nessuno** può sbloccare l'app (emergency lockdown). |
+| `requireAuth` | boolean (opzionale) | se `false`, l'app si apre direttamente senza schermata password. Se assente o `true` → password richiesta come al solito. |
 | `lastUpdated` | stringa | data dell'ultima modifica, solo per riferimento personale. |
+
+### Modalità "senza password" (requireAuth=false)
+
+Quando metti `"requireAuth": false`:
+- Tutte le installazioni esistenti, al successivo avvio, **saltano la schermata password** e vanno direttamente alla home
+- Le installazioni già aperte continuano a funzionare
+- L'app continua comunque a fare polling del Gist ogni 30s, quindi se riattivi `requireAuth` o `killSwitch`, scattano i blocchi
+
+Quando rimetti `"requireAuth": true`:
+- Le installazioni che erano dentro "senza password" (NO_AUTH_MARKER) vengono **slogati live entro ~30 secondi** con il banner "🔐 Password richiesta"
+- Tutti i nuovi avvii richiederanno la password come prima
+
+Esempi d'uso:
+- **Modalità "fidata"** durante un periodo di onboarding interno: `requireAuth=false` per qualche giorno
+- **Tornare a stretto** dopo un evento di sicurezza: `requireAuth=true` (default)
+- **Combinazione con killSwitch**: `killSwitch` ha sempre priorità — anche con `requireAuth=false`, se metti `killSwitch=true` l'app è bloccata per tutti
 
 > 🛡️ **Sicurezza incorporata**: l'app contiene un hash di "fallback" embeddato
 > nel binario. Se per errore svuoti l'array `validHashes`, l'app continua a

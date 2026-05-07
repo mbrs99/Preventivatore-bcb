@@ -186,6 +186,9 @@
         } else if (reason === 'password-revoked') {
           title.textContent = '🔄 Password aggiornata';
           msg.textContent   = 'La password è stata aggiornata dallo Studio. Inserisci la nuova password che ti è stata comunicata.';
+        } else if (reason === 'auth-required') {
+          title.textContent = '🔐 Password richiesta';
+          msg.textContent   = 'Lo Studio ha attivato la richiesta di password. Inseriscila per continuare ad usare l’app.';
         }
         banner.style.display = 'block';
       } catch {}
