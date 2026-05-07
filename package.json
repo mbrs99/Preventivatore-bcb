@@ -1,7 +1,7 @@
 {
   "name": "preventivatore-bcb",
   "productName": "Preventivatore BCB",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Preventivatore Studio Commercialista BCB — app desktop portable",
   "main": "src/main.js",
   "author": {

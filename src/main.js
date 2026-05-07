@@ -663,8 +663,9 @@ function createAuthWindow() {
   authWindow.on('closed', () => {
     const wasInteractiveClose = authWindow !== null;
     authWindow = null;
-    // Se l'utente chiude la finestra di auth senza sbloccare, chiudi tutta l'app
-    if (wasInteractiveClose && !isCurrentlyUnlocked()) {
+    // Se l'utente chiude la finestra di auth senza essersi sbloccato
+    // (currentUnlockHash è null), chiude tutta l'app.
+    if (wasInteractiveClose && !currentUnlockHash) {
       app.quit();
     }
   });
