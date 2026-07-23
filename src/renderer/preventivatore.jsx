@@ -1655,12 +1655,14 @@ async function generaDocumenti(form, items, T) {
   //   Consulenza generica  → group "Consulenza" (+ gruppi sconosciuti)
   //   Domiciliazione       → group "Domiciliazione"
   const sumBy = fn => items.filter(i => !i.sub && fn(i)).reduce((s,i) => s + (i.val||0), 0);
-  const NOTI = ["Contabilità","Dichiarazioni","IMU","Bilancio","CU / Modello 770","770","Consulenza","Domiciliazione"];
+  // "Modello 770" e "770" sono le etichette usate dalle voci personalizzate
+  // dell'Editor Tariffario (campo `sezione`): vanno nella riga CU/770.
+  const NOTI = ["Contabilità","Dichiarazioni","IMU","Bilancio","CU / Modello 770","770","Modello 770","Consulenza","Domiciliazione"];
 
   let cCont  = sumBy(i => i.group === "Contabilità");
   let cDich  = sumBy(i => i.group === "Dichiarazioni" || i.group === "IMU");
   let cBil   = sumBy(i => i.group === "Bilancio");
-  let cCU770 = sumBy(i => i.group === "CU / Modello 770" || i.group === "770");
+  let cCU770 = sumBy(i => i.group === "CU / Modello 770" || i.group === "770" || i.group === "Modello 770");
   let cCons  = sumBy(i => i.group === "Consulenza" || !NOTI.includes(i.group));
   let cDomic = sumBy(i => i.group === "Domiciliazione");
 
@@ -1932,7 +1934,10 @@ async function generaDocumenti(form, items, T) {
   } else if (form.hasContabilita && form.regimeContabile === 'ordinario'
              && (form.tipoCliente === 'pf' || form.tipoCliente === 'soc_persone')) {
     mandatoTask = { b64: TMPL_CONTRATTO, tokens: contTokens,
-      options: { apeRemove: !tantumPresente },
+      options: { apeRemove: !tantumPresente,
+        // Anche il modello legacy riduce l'elenco CONFERISCE al solo
+        // commercialista di riferimento scelto (coerenza con i mandati 2026)
+        transforms: [xml => _docx_soloProfessionista(xml, form.commercialistaRif, PROFESSIONISTI)] },
       label: 'Lettera di incarico (Ordinarie non Srl)', suffix: 'contratto' };
     warnings.push("Per le Ordinarie non Srl è stato usato il modello di mandato precedente: il nuovo file Word 2026 è in formato .doc e va prima convertito in .docx.");
   } else if (form.hasContabilita && form.regimeContabile === 'ordinario'
