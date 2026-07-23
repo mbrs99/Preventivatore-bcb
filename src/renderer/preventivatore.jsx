@@ -1,5 +1,10 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import * as XLSX from "xlsx";
+import JSZip from "jszip";
+import {
+  TMPL_PREV_ORD, TMPL_PREV_SRL, TMPL_PREV_SEMPL, TMPL_PREV_FORF, TMPL_PREV_CONS,
+  TMPL_MAND_SEMPL, TMPL_MAND_FORF,
+} from "./templates-bcb.js";
 
 /* ================================================================
    TEMPLATE DOCX — base64-encoded con token {{TOKEN}} univoci.
@@ -877,7 +882,43 @@ function calcAll(form, T) {
     }
   }
 
-  // ── Bilancio SRL — è "servizio connesso" alla tenuta contabile (1.1).
+  // ── Extra Allegato A che sono "servizi connessi" alla contabilità (1.1):
+  // adempimenti societari, camerali e di chiusura ciclo contabile annuale.
+  {
+    const A = T.allegatoA;
+    if (form.extraVarCCIAA)   add("Variazioni dati CCIAA",           A.variazioniCCIAA, "Per pratica", "Contabilità");
+    if (form.extraBilancioRI) add("Invio telematico Bilancio al RI", A.invioBilancioRI, "Per invio",   "Contabilità");
+    if (form.extraLibri)      add(`Vidimazione libri sociali (×${parseInt(form.nLibri)||1})`,
+                                  A.vidimLibri*(parseInt(form.nLibri)||1), "Per libro", "Contabilità");
+  }
+
+  // ── Adempimenti contabili EXTRA dal foglio CONTABILITA (R25-R42)
+  // Tutti classificati come "Contabilità" perché sono servizi connessi alla tenuta.
+  {
+    const CE = T.contExtra;
+    if (form.extraFattElettr) {
+      const n = parseInt(form.nFattElettr) || 0;
+      add(`Fattura elettronica (×${n})`, CE.fattElettr * n,
+        `${n} fatture × ${eur(CE.fattElettr)}`, "Contabilità");
+    }
+    if (form.extraXMLMensile) {
+      const n = parseInt(form.nXMLMensile) || 0;
+      add(`Invio XML mensile TD17/18/20 (×${n})`, CE.xmlMensile * n,
+        `${n} invii × ${eur(CE.xmlMensile)}`, "Contabilità");
+    }
+    if (form.extraMaggiorCorr)        add("Maggiorazione recupero corrispettivi",    CE.maggiorCorr,        "Importo fisso annuo", "Contabilità");
+    if (form.extraSituazContabile)    add("Situazione contabile periodica",           CE.situazContabile,    "Per situazione",      "Contabilità");
+    if (form.extraSituazPatrimoniale) add("Situazione patrimoniale periodica",        CE.situazPatrimoniale, "Per situazione",      "Contabilità");
+    if (form.extraLiquidIVAMensili)   add("Liquidazioni IVA mensili",                 CE.liquidIVAMensili,   "Importo fisso",       "Contabilità");
+    if (form.extraLiquidIVATrim)      add("Liquidazioni IVA trimestrali",             CE.liquidIVATrim,      "Importo fisso",       "Contabilità");
+    if (form.extraImportXML)          add("Importazione XML fatture (SDI)",           CE.importXML,          "Importo fisso",       "Contabilità");
+  }
+
+  // ── Bilancio SRL — nei nuovi template 2026 ha una RIGA DEDICATA
+  // ("Consulenza ed assistenza nella redazione del bilancio d'esercizio in
+  // formato CEE", presente nei template Ordinarie Srl e Consulenze), quindi
+  // gruppo proprio "Bilancio". Per i template senza quella riga la somma
+  // viene ripiegata in 1.1 Contabilità in fase di generazione documenti.
   // Composizione: due addendi indipendenti, sommabili.
   //   A) Calcolo progressivo su ricavi + attivo (con minimo art. 34 a pavimento)
   //   B) Tariffa fissa per anno (storicoMinimi) attivabile in aggiunta
@@ -916,72 +957,21 @@ function calcAll(form, T) {
       }
     }
 
-    add("Bilancio SRL", valCalc + valFissa, det, "Contabilità");
+    add("Bilancio SRL", valCalc + valFissa, det, "Bilancio");
   }
 
-  // ── Extra Allegato A che sono "servizi connessi" alla contabilità (1.1):
-  // adempimenti societari, camerali e di chiusura ciclo contabile annuale.
-  {
-    const A = T.allegatoA;
-    if (form.extraVarCCIAA)   add("Variazioni dati CCIAA",           A.variazioniCCIAA, "Per pratica", "Contabilità");
-    if (form.extraBilancioRI) add("Invio telematico Bilancio al RI", A.invioBilancioRI, "Per invio",   "Contabilità");
-    if (form.extraLibri)      add(`Vidimazione libri sociali (×${parseInt(form.nLibri)||1})`,
-                                  A.vidimLibri*(parseInt(form.nLibri)||1), "Per libro", "Contabilità");
-  }
-
-  // ── Adempimenti contabili EXTRA dal foglio CONTABILITA (R25-R42)
-  // Tutti classificati come "Contabilità" perché sono servizi connessi alla tenuta.
-  {
-    const CE = T.contExtra;
-    if (form.extraFattElettr) {
-      const n = parseInt(form.nFattElettr) || 0;
-      add(`Fattura elettronica (×${n})`, CE.fattElettr * n,
-        `${n} fatture × ${eur(CE.fattElettr)}`, "Contabilità");
-    }
-    if (form.extraXMLMensile) {
-      const n = parseInt(form.nXMLMensile) || 0;
-      add(`Invio XML mensile TD17/18/20 (×${n})`, CE.xmlMensile * n,
-        `${n} invii × ${eur(CE.xmlMensile)}`, "Contabilità");
-    }
-    if (form.extraMaggiorCorr)        add("Maggiorazione recupero corrispettivi",    CE.maggiorCorr,        "Importo fisso annuo", "Contabilità");
-    if (form.extraSituazContabile)    add("Situazione contabile periodica",           CE.situazContabile,    "Per situazione",      "Contabilità");
-    if (form.extraSituazPatrimoniale) add("Situazione patrimoniale periodica",        CE.situazPatrimoniale, "Per situazione",      "Contabilità");
-    if (form.extraLiquidIVAMensili)   add("Liquidazioni IVA mensili",                 CE.liquidIVAMensili,   "Importo fisso",       "Contabilità");
-    if (form.extraLiquidIVATrim)      add("Liquidazioni IVA trimestrali",             CE.liquidIVATrim,      "Importo fisso",       "Contabilità");
-    if (form.extraImportXML)          add("Importazione XML fatture (SDI)",           CE.importXML,          "Importo fisso",       "Contabilità");
-  }
-
-  // NOTA CLASSIFICAZIONE: CU e LIPE sono attribuite a "Contabilità" (1.1 del docx)
-  // e NON a "Dichiarazioni" (1.2), perché il template del preventivo (sezione 1.1
-  // "Impianto e tenuta scritture contabili") le elenca esplicitamente tra i servizi
-  // inclusi: "la predisposizione della certificazione dei compensi corrisposti a
-  // terzi, soggetti a ritenuta d'acconto..." (= CU) e "la predisposizione delle
-  // Comunicazioni Liquidazioni Periodiche Iva trimestrali..." (= LIPE).
-  // Il tariffario XLS le colloca nel foglio DICHIARAZIONI (logica fiscale), ma
-  // commercialmente sono servizi connessi alla tenuta contabile.
-  if (form.hasCU) {
-    const tb = tariffaBase("cu");
-    if (tb.usaBase) {
-      add("CU – Certificazione Unica", tb.val, tb.det, "Contabilità");
-    } else {
-      const cu = T.cu;
-      if (form.tipoCU === "interne") add("CU – Contabilità interne", cu.interne, "Importo fisso", "Contabilità");
-      else if (form.tipoCU === "soloTel") add("CU – Consulenze (solo telematico)", cu.soloTel, "Importo fisso", "Contabilità");
-      else {
-        const n = parseInt(form.nPercipientiCU) || 0;
-        add("CU – Consulenze (telematico + excel)", cu.telExcel + n * cu.perPercipiente,
-          `Base ${eur(cu.telExcel)} + ${n} percipienti × ${eur(cu.perPercipiente)}`, "Contabilità");
-      }
-    }
-  }
-
+  // NOTA CLASSIFICAZIONE 2026: nei nuovi template la LIPE compare nella riga
+  // 1.2 Dichiarazioni ("redditi, IRAP, ISA, IVA, LIPE ecc.") e la CU sta nella
+  // riga dedicata "modelli CU e dichiarazione dei Sostituti di Imposta (770)".
+  // La vecchia regola "CU/LIPE in 1.1 Contabilità" valeva per il template
+  // storico e NON si applica più.
   if (form.hasLipe) {
     const tb = tariffaBase("lipe");
     if (tb.usaBase) {
-      add("LIPE – Comunicazioni Periodiche IVA", tb.val, tb.det, "Contabilità");
+      add("LIPE – Comunicazioni Periodiche IVA", tb.val, tb.det, "Dichiarazioni");
     } else {
       const n = Math.min(4, Math.max(1, parseInt(form.nInviiLipe) || 1));
-      add("LIPE – Comunicazioni Periodiche IVA", T.lipe * n, `${n} invii × ${eur(T.lipe)}`, "Contabilità");
+      add("LIPE – Comunicazioni Periodiche IVA", T.lipe * n, `${n} invii × ${eur(T.lipe)}`, "Dichiarazioni");
     }
   }
 
@@ -1009,19 +999,6 @@ function calcAll(form, T) {
   calcUnico(form.hasUPF, "UPF – Modello Unico Persone Fisiche",    mkUPF(T.upf), form.upfQuadri, form.upfRighe, "Dichiarazioni", "upf");
   calcUnico(form.hasUSP, "USP – Modello Unico Società di Persone",  mkUSP(T.usp), form.uspQuadri, form.uspRighe, "Dichiarazioni", "usp");
   calcUnico(form.hasUSC, "USC – Modello Unico Società di Capitali", mkUSC(T.usc), form.uscQuadri, form.uscRighe, "Dichiarazioni", "usc");
-
-  if (form.has770) {
-    const tb = tariffaBase("m770");
-    if (tb.usaBase) {
-      add("Modello 770", tb.val, tb.det, "Dichiarazioni");
-    } else if (form.tipo770 === "fisso") {
-      add("Modello 770", T.m770.fisso, "Importo fisso", "Dichiarazioni");
-    } else {
-      const n = parseInt(form.nRighi770) || 0;
-      add("Modello 770", T.m770.base + n * T.m770.perRigo,
-        `Base ${eur(T.m770.base)} + ${n} righi × ${eur(T.m770.perRigo)}`, "Dichiarazioni");
-    }
-  }
 
   if (form.hasF24) {
     const tb = tariffaBase("f24");
@@ -1096,6 +1073,37 @@ function calcAll(form, T) {
       val > 0 ? "Tariffa definita manualmente" : "⚠ Inserire importo", "Dichiarazioni");
   }
 
+  // ── CU e Modello 770 — riga dedicata dei nuovi template ("predisposizione
+  // dei modelli CU e della dichiarazione dei Sostituti di Imposta, mod. 770").
+  if (form.hasCU) {
+    const tb = tariffaBase("cu");
+    if (tb.usaBase) {
+      add("CU – Certificazione Unica", tb.val, tb.det, "CU / Modello 770");
+    } else {
+      const cu = T.cu;
+      if (form.tipoCU === "interne") add("CU – Contabilità interne", cu.interne, "Importo fisso", "CU / Modello 770");
+      else if (form.tipoCU === "soloTel") add("CU – Consulenze (solo telematico)", cu.soloTel, "Importo fisso", "CU / Modello 770");
+      else {
+        const n = parseInt(form.nPercipientiCU) || 0;
+        add("CU – Consulenze (telematico + excel)", cu.telExcel + n * cu.perPercipiente,
+          `Base ${eur(cu.telExcel)} + ${n} percipienti × ${eur(cu.perPercipiente)}`, "CU / Modello 770");
+      }
+    }
+  }
+
+  if (form.has770) {
+    const tb = tariffaBase("m770");
+    if (tb.usaBase) {
+      add("Modello 770", tb.val, tb.det, "CU / Modello 770");
+    } else if (form.tipo770 === "fisso") {
+      add("Modello 770", T.m770.fisso, "Importo fisso", "CU / Modello 770");
+    } else {
+      const n = parseInt(form.nRighi770) || 0;
+      add("Modello 770", T.m770.base + n * T.m770.perRigo,
+        `Base ${eur(T.m770.base)} + ${n} righi × ${eur(T.m770.perRigo)}`, "CU / Modello 770");
+    }
+  }
+
   if (form.hasImuF24) {
     const tb = tariffaBase("imuF24");
     if (tb.usaBase) {
@@ -1116,6 +1124,10 @@ function calcAll(form, T) {
   }
 
   if (form.hasConsulenza) {
+    const tb = tariffaBase("consulenza");
+    if (tb.usaBase) {
+      add("Consulenza", tb.val, tb.det, "Consulenza");
+    } else {
     const r = parseNum(form.consulenzaRicavi), f = fascia(T.consulenza, r);
     if (f?.val) {
       add("Consulenza", f.val, `Ricavi ${eur(r)} – fascia applicata`, "Consulenza");
@@ -1129,6 +1141,7 @@ function calcAll(form, T) {
         add("Consulenza (tariffa concordata)", m,
           `Ricavi ${eur(r)} – importo definito caso per caso`, "Consulenza");
       }
+    }
     }
   }
 
@@ -1154,6 +1167,25 @@ function calcAll(form, T) {
       ? `Importo concordato (minimo tariffario: ${eur(A.ravvedimenti)})`
       : `Importo minimo tariffario (${eur(A.ravvedimenti)} – può essere maggiore)`;
     add("Regolarizzazioni / ravvedimenti", val, det, "Consulenza");
+  }
+
+  // ── Voci libere (nome + importo manuali) — vanno nel gruppo scelto dall'utente
+  for (const v of (form.vociLibere || [])) {
+    const val = parseNum(v.importo);
+    const nome = (v.nome || "").trim();
+    if (!nome && !(val > 0)) continue;   // riga ancora vuota: ignorata
+    add(nome || "Voce libera", val,
+      val > 0 ? "Importo concordato manualmente" : "⚠ Inserire importo",
+      v.gruppo || "Consulenza");
+  }
+
+  // ── Domiciliazione postale — riga dedicata nei nuovi template di preventivo.
+  // Gruppo proprio: NON si somma a 1.1-1.4 ma finisce nella riga
+  // "Servizio annuale di domiciliazione postale" del documento.
+  if (form.hasDomiciliazione) {
+    const val = parseNum(form.tariffaDomiciliazione);
+    add("Servizio annuale di domiciliazione postale", val,
+      val > 0 ? "Importo annuo concordato" : "⚠ Inserire importo", "Domiciliazione");
   }
 
   // ── Voci personalizzate (definite dall'utente nell'Editor del tariffario)
@@ -1218,8 +1250,12 @@ function numToItalian(n) {
 }
 function formatImportoLettere(v) {
   if (!v || v<=0) return '€ 0,00 (zero/00 centesimi)';
-  const intPart = Math.round(v);
-  const cents = Math.round((v - intPart)*100);
+  // Arrotonda UNA volta al centesimo, poi separa euro e centesimi con floor/resto.
+  // (Il vecchio Math.round(v) sulla parte intera trasformava 677,71 in
+  // "678,-29 centesimi": euro arrotondati per eccesso e centesimi negativi.)
+  const totCents = Math.round(v * 100);
+  const intPart  = Math.floor(totCents / 100);
+  const cents    = totCents % 100;
   const formatted = intPart.toLocaleString('it-IT')+','+(cents<10?'0':'')+cents;
   return `€ ${formatted} (${numToItalian(intPart)}/${cents<10?'0':''}${cents} centesimi)`;
 }
@@ -1434,6 +1470,87 @@ function _docx_setFatturazione(xml, scelte) {
   return result;
 }
 
+/* ────────────────────────────────────────────────────────────────
+   Helper XML per i TEMPLATE 2026 (tokenizzati): operano su paragrafi
+   e run in base al testo contenuto. Le parti in ROSSO nei template
+   sono "segnaposto/scelte": quando l'app conosce la risposta il testo
+   diventa nero (de-rossa), altrimenti resta rosso per la revisione
+   manuale in Word.
+   ──────────────────────────────────────────────────────────────── */
+
+// Testo concatenato dei <w:t> di un frammento XML
+function _docx_textOf(fragment) {
+  const matches = fragment.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) || [];
+  return matches.map(m => m.replace(/<w:t[^>]*>|<\/w:t>/g, '')).join('');
+}
+
+// Applica fn(para, testo) a ogni paragrafo; se fn ritorna una stringa
+// la usa come sostituto (stringa vuota = paragrafo rimosso).
+function _docx_mapParas(xml, fn) {
+  return xml.replace(/<w:p[ >][\s\S]*?<\/w:p>/g, (para) => {
+    const out = fn(para, _docx_textOf(para));
+    return out === undefined || out === null ? para : out;
+  });
+}
+
+// Rimuove ogni paragrafo il cui testo contiene `needle`
+function _docx_removeParasWithText(xml, needle) {
+  return _docx_mapParas(xml, (para, text) => text.includes(needle) ? '' : undefined);
+}
+
+// Toglie il colore (rosso) da tutti i run dei paragrafi che contengono `needle`
+function _docx_derossaParasWithText(xml, needle) {
+  return _docx_mapParas(xml, (para, text) =>
+    text.includes(needle) ? para.replace(/<w:color w:val="[^"]*"\s*\/>/g, '') : undefined);
+}
+
+// Toglie il colore dai singoli run il cui testo contiene `needle`
+function _docx_derossaRunsWithText(xml, needle) {
+  return xml.replace(/<w:r(?: [^>]*)?>[\s\S]*?<\/w:r>/g, run => {
+    const m = run.match(/<w:t[^>]*>([^<]*)<\/w:t>/);
+    if (!m || !m[1].includes(needle)) return run;
+    return run.replace(/<w:color w:val="[^"]*"\s*\/>/g, '');
+  });
+}
+
+// Fatturazione globale: sostituisce OGNI "Mensile/Trimestrale" con la scelta
+// e rimuove il rosso dal run. Se scelta vuota → nessuna modifica (resta rosso).
+function _docx_fillFatturazione(xml, scelta) {
+  if (scelta !== "Mensile" && scelta !== "Trimestrale") return xml;
+  return xml.replace(/<w:r(?: [^>]*)?>[\s\S]*?<\/w:r>/g, run => {
+    const m = run.match(/<w:t[^>]*>([^<]*)<\/w:t>/);
+    if (!m || !m[1].includes('Mensile/Trimestrale')) return run;
+    const replaced = run.replace(m[0], m[0].replace('Mensile/Trimestrale', scelta));
+    return replaced.replace(/<w:color w:val="[^"]*"\s*\/>/g, '');
+  });
+}
+
+// Coppia di marker <!--{{MARK_START}}--> ... <!--{{MARK_END}}-->:
+// se removeBlock rimuove tutto il contenuto (marker inclusi), altrimenti
+// toglie solo i marker lasciando il contenuto.
+function _docx_handleMarkerPair(xml, mark, removeBlock) {
+  const open = `<!--{{${mark}_START}}-->`, close = `<!--{{${mark}_END}}-->`;
+  const i0 = xml.indexOf(open), i1 = xml.indexOf(close);
+  if (i0 < 0 || i1 < 0 || i1 < i0) return xml;
+  if (removeBlock) return xml.slice(0, i0) + xml.slice(i1 + close.length);
+  return xml.split(open).join('').split(close).join('');
+}
+
+// Mandato: se è stato scelto un commercialista di riferimento, l'elenco
+// CONFERISCE tiene SOLO lui (il paragrafo resta e diventa nero); gli altri
+// sei paragrafi vengono rimossi. Senza scelta l'elenco resta intero (rosso).
+function _docx_soloProfessionista(xml, nomeScelto, elenco) {
+  if (!nomeScelto) return xml;
+  for (const p of elenco) {
+    if (p.nome === nomeScelto) {
+      xml = _docx_derossaParasWithText(xml, 'al Dottor ' + p.nome);
+    } else {
+      xml = _docx_removeParasWithText(xml, 'al Dottor ' + p.nome);
+    }
+  }
+  return xml;
+}
+
 // Rimuove "del ____ %" decorativo dall'etichetta "Sconto concordato".
 // I tre frammenti (testo "del ", run con underscore rosso, run con "%")
 // vengono trasformati in stringhe vuote — la cella visualizza solo
@@ -1451,8 +1568,6 @@ function _docx_cleanScontoLabels(xml) {
 }
 
 async function fillDocx(b64Template, tokenMap, options = {}) {
-  const JSZip = window.JSZip;
-  if (!JSZip) throw new Error('JSZip non caricato');
   const zip = await JSZip.loadAsync(b64ToUint8(b64Template));
   let xml = await zip.file('word/document.xml').async('string');
 
@@ -1482,6 +1597,10 @@ async function fillDocx(b64Template, tokenMap, options = {}) {
   if (options.apeRemove !== undefined) {
     xml = _docx_handleApeMarkers(xml, !!options.apeRemove);
   }
+  // Trasformazioni libere (template 2026): funzioni xml → xml applicate in ordine
+  if (Array.isArray(options.transforms)) {
+    for (const fn of options.transforms) xml = fn(xml);
+  }
 
   // Sostituzione dei token testuali
   zip.file('word/document.xml', replaceAll(xml, tokenMap));
@@ -1496,27 +1615,75 @@ function blobToDataUrl(blob) {
   });
 }
 
-async function generaDocumenti(form, items, T) {
-  // ── Classificazione voci per i blocchi 1.1–1.4 del contratto ──
-  // Usiamo il campo `group` come metadata pulita (già assegnato in calcAll)
-  // invece di matchare parole chiave nel label — più robusto e senza falsi positivi.
-  // Il contratto ha 4 blocchi:
-  //   1.1 Contabilità — tutte le voci di group="Contabilità"
-  //   1.2 Dichiarazioni — tutte le voci di group="Dichiarazioni" (escluso Modello 770)
-  //                        più le voci di group="IMU" (F24 IMU, Dichiarazione IMU)
-  //   1.3 Modello 770 — la voce con group="Dichiarazioni" che inizia con "Modello 770"
-  //   1.4 Consulenza — voci di group="Consulenza"
-  const is770 = i => i.label.startsWith("Modello 770");
-  const sumBy = fn => items.filter(i => !i.sub && fn(i)).reduce((s,i) => s + (i.val||0), 0);
+/* ────────────────────────────────────────────────────────────────
+   Selezione del template di preventivo in base a regime e tipo cliente.
+   Ritorna { key, b64, righe } dove `righe` dichiara quali righe-compenso
+   esistono nel template (le somme dei gruppi mancanti vengono ripiegate
+   nella riga più vicina, così il totale del documento torna sempre).
+   ──────────────────────────────────────────────────────────────── */
+function scegliTemplatePreventivo(form) {
+  const reg  = form.regimeContabile || "";
+  const isSocC = form.tipoCliente === "soc_capitali";
+  if (!form.hasContabilita || !reg) {
+    return { key: "cons", b64: TMPL_PREV_CONS, nome: "Consulenze",
+             righe: { cont:false, bil:true, cu770:true, domic:true } };
+  }
+  if (reg === "forfettario") {
+    return { key: "forf", b64: TMPL_PREV_FORF, nome: "Forfettari",
+             righe: { cont:true, bil:false, cu770:false, domic:false } };
+  }
+  if (reg === "semplificato") {
+    return { key: "sempl", b64: TMPL_PREV_SEMPL, nome: "Semplificate",
+             righe: { cont:true, bil:false, cu770:true, domic:true } };
+  }
+  // ordinario
+  if (isSocC) {
+    return { key: "srl", b64: TMPL_PREV_SRL, nome: "Ordinarie Srl",
+             righe: { cont:true, bil:true, cu770:true, domic:true } };
+  }
+  return { key: "ord", b64: TMPL_PREV_ORD, nome: "Ordinarie non Srl",
+           righe: { cont:true, bil:false, cu770:true, domic:true } };
+}
 
-  const cCont = sumBy(i => i.group === "Contabilità");
-  const c770  = sumBy(i => i.group === "Dichiarazioni" && is770(i));
-  const cCons = sumBy(i => i.group === "Consulenza");
-  const cDich = sumBy(i =>
-    (i.group === "Dichiarazioni" && !is770(i)) || i.group === "IMU"
-  );
+async function generaDocumenti(form, items, T) {
+  // ── Somme per riga secondo la classificazione dei template 2026 ──
+  // (gruppi assegnati in calcAll):
+  //   1.1 Contabilità      → group "Contabilità"
+  //   1.2 Dichiarazioni    → group "Dichiarazioni" + "IMU"
+  //   Bilancio CEE         → group "Bilancio" (riga propria in Srl/Consulenze)
+  //   CU + Modello 770     → group "CU / Modello 770" (+ legacy "770" custom)
+  //   Consulenza generica  → group "Consulenza" (+ gruppi sconosciuti)
+  //   Domiciliazione       → group "Domiciliazione"
+  const sumBy = fn => items.filter(i => !i.sub && fn(i)).reduce((s,i) => s + (i.val||0), 0);
+  const NOTI = ["Contabilità","Dichiarazioni","IMU","Bilancio","CU / Modello 770","770","Consulenza","Domiciliazione"];
+
+  let cCont  = sumBy(i => i.group === "Contabilità");
+  let cDich  = sumBy(i => i.group === "Dichiarazioni" || i.group === "IMU");
+  let cBil   = sumBy(i => i.group === "Bilancio");
+  let cCU770 = sumBy(i => i.group === "CU / Modello 770" || i.group === "770");
+  let cCons  = sumBy(i => i.group === "Consulenza" || !NOTI.includes(i.group));
+  let cDomic = sumBy(i => i.group === "Domiciliazione");
+
+  const warnings = [];
+  const tmpl = scegliTemplatePreventivo(form);
+
+  // Ripiegamenti per le righe assenti nel template scelto
+  if (!tmpl.righe.bil && cBil > 0) { cCont += cBil; cBil = 0; }
+  if (!tmpl.righe.cu770 && cCU770 > 0) {
+    cDich += cCU770; cCU770 = 0;
+    warnings.push("Il template Forfettari non ha la riga CU/770: l'importo è stato sommato alla riga Dichiarazioni.");
+  }
+  if (!tmpl.righe.domic && cDomic > 0) {
+    cCons += cDomic; cDomic = 0;
+    warnings.push("Il template Forfettari non ha la riga Domiciliazione: l'importo è stato sommato alla riga Consulenza.");
+  }
+  if (!tmpl.righe.cont && cCont > 0) {
+    cDich += cCont; cCont = 0;
+    warnings.push("Il template Consulenze non ha la riga Contabilità: l'importo è stato sommato alla riga Dichiarazioni.");
+  }
+
   const cTantum = form.hasTariffaApertura ? (parseFloat(form.tariffaApertura) || 0) : 0;
-  const cTot   = cCont + cDich + c770 + cCons;
+  const cTot   = cCont + cDich + cBil + cCU770 + cCons + cDomic;
 
   // Sconto Concordato (€ assoluti) — entra solo nel Preventivo, non nel
   // contratto/informativa. Clamp a 0 se negativo o superiore al totale.
@@ -1542,41 +1709,103 @@ async function generaDocumenti(form, items, T) {
 
   const isPF = !isSocieta;
 
-  // Token map preventivo
+  // ── Token map PREVENTIVO (template 2026 tokenizzati) ──────────
+  const nRileStr = String(form.nRilevazioni || '').trim();
+  const nDocsStr = String(form.nDocumenti  || '').trim();
+  const fatt = form.fatturazioneGlobale || '';
+
+  // Riga "pagamento 12/4 rid mensili/trimestrali – bonifico bancario":
+  // risolta con le scelte di Step 1. Se la scelta è completa il testo
+  // diventa nero, altrimenti resta rosso (placeholder da rivedere in Word).
+  const pagamentoCompleto =
+    form.pagamentoModo === 'bonifico' ||
+    (form.pagamentoModo === 'rid' && (fatt === 'Mensile' || fatt === 'Trimestrale'));
+  const pagamentoText =
+    form.pagamentoModo === 'bonifico' ? 'pagamento mediante bonifico bancario'
+    : form.pagamentoModo === 'rid'
+      ? (fatt === 'Mensile'     ? 'pagamento 12 rid mensili'
+        : fatt === 'Trimestrale' ? 'pagamento 4 rid trimestrali'
+        : 'pagamento 12/4 rid mensili/trimestrali')
+      : 'pagamento 12/4 rid mensili/trimestrali – bonifico bancario';
+
   const prevTokens = {
-    '{{RICHIEDENTE}}': cliente,
-    '{{N_RILE}}':      (form.regimeContabile==='semplificato' ? String(form.nDocumenti||0)
-                         : form.regimeContabile==='ordinario'    ? String(form.nRilevazioni||0)
-                         : '—'),
-    '{{C_TANTUM}}':       tantumPresente   ? eur(cTantum)        : '\u2014',
-    '{{C_TANTUM_SCONTO}}': scontoTantum>0  ? eur(scontoTantum)   : '\u2014',
-    '{{C_TANTUM_NETTO}}':  tantumPresente  ? eur(cTantumNetto)   : '\u2014',
-    '{{C_CONT}}':      eur(cCont),
-    '{{C_DICH}}':      eur(cDich),
-    '{{C_770}}':       c770>0 ? eur(c770) : '\u2014',
-    '{{C_CONS}}':      cCons>0 ? eur(cCons) : '\u2014',
+    '{{RICHIEDENTE}}':     cliente,
+    '{{N_RILE}}':          nRileStr || '_____',
+    '{{N_DOCS}}':          nDocsStr || '_____',
+    '{{C_TANTUM}}':        tantumPresente ? eur(cTantum)       : '—',
+    '{{C_TANTUM_TOT}}':    tantumPresente ? eur(cTantum)       : '—',
+    '{{C_TANTUM_SCONTO}}': scontoTantum>0 ? eur(scontoTantum)  : '—',
+    '{{C_TANTUM_NETTO}}':  tantumPresente ? eur(cTantumNetto)  : '—',
+    '{{C_CONT}}':   eur(cCont),
+    '{{C_DICH}}':   cDich>0  ? eur(cDich)  : '—',
+    '{{C_BIL}}':    cBil>0   ? eur(cBil)   : '—',
+    '{{C_CU770}}':  cCU770>0 ? eur(cCU770) : '—',
+    '{{C_CONS}}':   cCons>0  ? eur(cCons)  : '—',
+    '{{C_DOMIC}}':  cDomic>0 ? eur(cDomic) : '—',
     '{{C_TOT_ANNUO}}':    eur(cTot),
-    '{{C_ANNUO_SCONTO}}': scontoAnnuo>0 ? eur(scontoAnnuo) : '\u2014',
+    '{{C_ANNUO_SCONTO}}': scontoAnnuo>0 ? eur(scontoAnnuo) : '—',
     '{{C_ANNUO_NETTO}}':  eur(cTotNetto),
-    '{{I_TANTUM}}':    tantumPresente ? formatImportoLettere(cTantumNetto) : 'non applicabile',
-    '{{I_CONT}}':      formatImportoLettere(cCont),
-    '{{I_DICH}}':      cDich>0 ? formatImportoLettere(cDich) : 'non applicabile',
-    '{{I_770}}':       c770>0  ? formatImportoLettere(c770)  : 'non applicabile',
-    '{{I_CONS}}':      cCons>0 ? formatImportoLettere(cCons) : 'non applicabile',
-    // Cross-reference statico nel template ("Onorario già compreso nel
-    // precedente punto 1.1 1.2"): se la tariffa apertura è applicata,
-    // la sezione Contabilità diventa 1.2 (1.1 = apertura), altrimenti 1.1.
-    '1.1 1.2':         tantumPresente ? '1.2' : '1.1',
-    // Cella "Compenso totale dovuto per prestazione una tantum": il template
-    // contiene un literal "€ 0,00" come placeholder. Lo sostituiamo col
-    // valore lordo dell'apertura (stesso valore mostrato nella riga sopra).
-    // Sicuro: "€ 0,00" non appare altrove nel template; quando l'apertura
-    // non è applicata l'intera tabella tantum viene rimossa, no-op.
-    '€ 0,00':          eur(cTantum),
+    // "Onorario già compreso nel precedente punto {{P_REF}}" → riga
+    // Contabilità del template (nel Forfettari scala con la tariffa apertura)
+    '{{P_REF}}':  tmpl.key === 'forf' ? (tantumPresente ? '1.2' : '1.1') : '1.1',
+    // Numerazione dinamica del Forfettari (le altre 4 varianti hanno numeri fissi)
+    '{{D_CONT}}': tantumPresente ? '2' : '1',
+    '{{D_DICH}}': tantumPresente ? '3' : '2',
+    '{{D_CONS}}': tantumPresente ? '4' : '3',
+    '{{PAGAMENTO}}': pagamentoText,
   };
 
-  // Token map contratto
-  // Token map contratto (lettera di incarico).
+  // ── Trasformazioni XML del preventivo (condizionali) ─────────
+  const prevTransforms = [];
+  if (!tantumPresente) {
+    // Rimuove la tabella-sommario una tantum e la relativa tabella di
+    // dettaglio ("La pratica in oggetto richiede i seguenti adempimenti").
+    prevTransforms.push(xml => _docx_removeTableContaining(xml, '{{C_TANTUM}}'));
+    prevTransforms.push(xml => _docx_removeTableContaining(xml, 'La pratica in oggetto richiede'));
+  }
+  // Fatturazione globale su tutte le righe (se scelta)
+  prevTransforms.push(xml => _docx_fillFatturazione(xml, fatt));
+  // De-rossa i run risolti dall'app
+  prevTransforms.push(xml => _docx_derossaRunsWithText(xml, '{{P_REF}}'));
+  if (pagamentoCompleto) {
+    prevTransforms.push(xml => _docx_derossaRunsWithText(xml, '{{PAGAMENTO}}'));
+  }
+  if (tmpl.key === 'forf') {
+    for (const tk of ['{{D_CONT}}', '{{D_DICH}}', '{{D_CONS}}']) {
+      prevTransforms.push(xml => _docx_derossaRunsWithText(xml, tk));
+    }
+  }
+  // IRAP: nera se la dichiarazione IRAP è inclusa, altrimenti resta rossa
+  if (form.hasIrap) {
+    prevTransforms.push(xml => _docx_derossaRunsWithText(xml, 'IRAP'));
+    prevTransforms.push(xml => _docx_derossaRunsWithText(xml, 'irap'));
+  }
+  // Dichiarazione annuale IVA: nera se selezionata (punto del dettaglio 1.2)
+  if (form.hasDichIVA) {
+    prevTransforms.push(xml => _docx_derossaParasWithText(xml, 'dichiarazione annuale iva'));
+  }
+  // Punto 11 — chi presenta/paga gli F24 (dettagli 1.1 e 1.2)
+  const F24_CLIENTE = 'invio al cliente dei modelli F24';
+  const F24_STUDIO  = 'presentazione telematica dei modelli F24 mediante addebito';
+  if (form.f24Gestione === 'cliente') {
+    prevTransforms.push(xml => _docx_removeParasWithText(xml, F24_STUDIO));
+    prevTransforms.push(xml => _docx_derossaParasWithText(xml, F24_CLIENTE));
+  } else if (form.f24Gestione === 'studio') {
+    prevTransforms.push(xml => _docx_removeParasWithText(xml, F24_CLIENTE));
+    prevTransforms.push(xml => _docx_derossaParasWithText(xml, F24_STUDIO));
+  }
+  // Punto 15 — gestione posizione previdenziale INPS vs Casse
+  const INPS_BULLET = 'la gestione della posizione previdenziale del titolare';
+  const cassaEsclusiva = form.tipoAttivita === 'professionista_cassa' || (form.hasCasse && !form.hasINPS);
+  const inpsGestita = form.hasINPS || form.tipoAttivita === 'artigiano_commerciante'
+                      || form.tipoAttivita === 'gestione_separata';
+  if (cassaEsclusiva) {
+    prevTransforms.push(xml => _docx_removeParasWithText(xml, INPS_BULLET));
+  } else if (inpsGestita) {
+    prevTransforms.push(xml => _docx_derossaParasWithText(xml, INPS_BULLET));
+  }
+
+  // Token map contratto LEGACY (Ordinarie non Srl — modello precedente).
   // Schema del template:
   //   "Attivit\u00e0 Una Tantum nella misura di euro {{C_TANTUM}} ..."  \u2190 importo netto dovuto
   //   "Totale dei compensi annui pari a euro {{C_TOT_ANNUO}} al netto dello
@@ -1612,8 +1841,11 @@ async function generaDocumenti(form, items, T) {
     '{{C_TANTUM}}':    tantumPresente ? eur(cTantumNetto) : '\u2014',
     '{{C_CONT}}':      eur(cCont),
     '{{C_DICH}}':      cDich>0  ? eur(cDich)  : '\u2014',
-    '{{C_770}}':       c770>0   ? eur(c770)   : '\u2014',
-    '{{C_CONS}}':      cCons>0  ? eur(cCons)  : '\u2014',
+    // Nel modello legacy il punto "770" riceve la somma CU+770 (nuova
+    // classificazione 2026) e la consulenza assorbe la domiciliazione,
+    // cos\u00ec la somma dei punti coincide con il totale annuo.
+    '{{C_770}}':       cCU770>0 ? eur(cCU770) : '\u2014',
+    '{{C_CONS}}':      (cCons+cDomic)>0 ? eur(cCons+cDomic) : '\u2014',
     '{{C_EXTRA}}':     '\u2014',
     '{{C_TOT_ANNUO}}': eur(cTot),
     '{{SCONTO_PCT}}':  scontoAnnuo>0 ? eur(scontoAnnuo) : '\u2014',
@@ -1636,82 +1868,117 @@ async function generaDocumenti(form, items, T) {
     '{{DATA_DOCUMENTO}}':  dataDoc,
   };
 
-  // ── Verifica applicabilità del CONTRATTO ──────────────────
-  // Il template del contratto è specifico per ditte individuali e società di
-  // persone in regime ORDINARIO (come indicato nel nome file "Ordinarie non Srl"
-  // e ribadito nel titolo del documento).
-  // Per SRL/SpA, regime forfettario o semplificato, il template non è adatto.
-  const contrattoApplicabile =
-    (form.tipoCliente === 'pf' || form.tipoCliente === 'soc_persone') &&
-    form.regimeContabile === 'ordinario' &&
-    form.hasContabilita;
+  // ── Selezione della LETTERA DI INCARICO (mandato) ─────────────
+  // Template nuovi 2026: Forfettari e Semplificate.
+  // Ordinarie non Srl: si usa ancora il modello precedente (già tokenizzato)
+  // finché il nuovo file .doc non sarà convertito in .docx.
+  // Ordinarie Srl e Consulenze: mandato non disponibile (in attesa dei .docx).
+  const blockPFFull  = blockPF  + 'Cliente”,';
+  const blockSocFull = blockSoc + 'Cliente”,';
 
-  const motivoContrattoNonApplicabile = !contrattoApplicabile ? (() => {
-    if (form.tipoCliente === 'soc_capitali')
-      return "Il template della lettera di incarico è valido solo per ditte individuali e società di persone. Per una società di capitali (SRL/SpA) serve un template dedicato, non disponibile tra quelli caricati.";
-    if (!form.hasContabilita)
-      return "Selezionare prima un regime di contabilità nello Step 2 per generare la lettera di incarico.";
-    if (!form.regimeContabile)
-      return "Nessun regime contabile selezionato. Torna allo Step 2 e scegli un regime (forfettario, semplificato o ordinario) per procedere.";
-    if (form.regimeContabile === 'forfettario')
-      return "Il template della lettera di incarico è stato predisposto per la contabilità ordinaria. Per clienti in regime forfettario serve un template dedicato (il forfettario ha obblighi diversi: no IVA, no LIPE, ecc.).";
-    if (form.regimeContabile === 'semplificato')
-      return "Il template della lettera di incarico è stato predisposto per la contabilità ordinaria. Per clienti in regime semplificato serve un template dedicato.";
-    return "Il template della lettera di incarico non è applicabile a questo caso.";
-  })() : null;
+  const mandTokens = {
+    '{{CLIENTE_BLOCK_PF}}':  blockPFFull,
+    '{{CLIENTE_BLOCK_SOC}}': blockSocFull,
+    '{{M_TANTUM}}': tantumPresente ? eur(cTantumNetto) : '—',
+    // Compensi per punto: rispecchiano le righe del preventivo allegato.
+    //   Semplificate: 1.1 contabilità, 1.2 dichiarazioni, 1.3 CU/770,
+    //                 1.4 consulenza, 1.5 domiciliazione
+    //   Forfettari:   1.1 contabilità, 1.2 dichiarazioni (con CU/770),
+    //                 1.3 consulenza (con domiciliazione) — 1.4/1.5 non usati
+    '{{M_P11}}': eur(cCont),
+    '{{M_P12}}': cDich>0 ? eur(cDich) : '—',
+    '{{M_P13}}': tmpl.key === 'forf' ? (cCons>0  ? eur(cCons)  : '—')
+                                     : (cCU770>0 ? eur(cCU770) : '—'),
+    '{{M_P14}}': tmpl.key === 'forf' ? '—' : (cCons>0  ? eur(cCons)  : '—'),
+    '{{M_P15}}': tmpl.key === 'forf' ? '—' : (cDomic>0 ? eur(cDomic) : '—'),
+    '{{M_TOT}}':    eur(cTot),
+    '{{M_SCONTO}}': scontoAnnuo>0 ? eur(scontoAnnuo) : '—',
+    '{{M_ANNO}}':   anno,
+    '{{M_RIDOTTO}}': eur(cTotNetto),
+    '{{M_PERIODICITA}}': fatt === 'Mensile' ? 'mensilmente'
+                       : fatt === 'Trimestrale' ? 'trimestralmente'
+                       : 'mensilmente / trimestralmente',
+    '{{M_MODALITA}}':
+      form.pagamentoModo === 'rid'
+        ? 'mediante utilizzo del servizio bancario di autorizzazione continuativa di addebito S.D.D. (Sepa Direct Debit ex modello R.I.D.)'
+      : form.pagamentoModo === 'bonifico'
+        ? 'mediante bonifico bancario'
+        : 'mediante utilizzo del servizio bancario di autorizzazione continuativa di addebito S.D.D. (Sepa Direct Debit ex modello R.I.D.) [IN ALTERNATIVA] mediante bonifico bancario',
+  };
+
+  const mandTransforms = [
+    // Blocco descrizione sezione 1.1 apertura + riga compensi una tantum:
+    // rimossi quando non c'è la tariffa apertura, altrimenti restano
+    // (vengono comunque tolti i marker invisibili).
+    xml => _docx_handleMarkerPair(xml, 'APE_BLOCK',  !tantumPresente),
+    xml => _docx_handleMarkerPair(xml, 'APE_TANTUM', !tantumPresente),
+    // Elenco CONFERISCE ridotto al solo commercialista di riferimento
+    xml => _docx_soloProfessionista(xml, form.commercialistaRif, PROFESSIONISTI),
+    // Tiene solo il blocco cliente pertinente (PF oppure società) e rimuove
+    // il segnaposto "[Ovvero]"
+    xml => _docx_removeParasWithText(xml, isPF ? '{{CLIENTE_BLOCK_SOC}}' : '{{CLIENTE_BLOCK_PF}}'),
+    xml => _docx_removeParasWithText(xml, '[Ovvero]'),
+  ];
+
+  let mandatoTask = null;   // { b64, tokens, options, label, suffix }
+  if (form.hasContabilita && form.regimeContabile === 'forfettario') {
+    mandatoTask = { b64: TMPL_MAND_FORF, tokens: mandTokens,
+      options: { transforms: mandTransforms },
+      label: 'Lettera di incarico (Forfettari 2026)', suffix: 'mandato' };
+  } else if (form.hasContabilita && form.regimeContabile === 'semplificato') {
+    mandatoTask = { b64: TMPL_MAND_SEMPL, tokens: mandTokens,
+      options: { transforms: mandTransforms },
+      label: 'Lettera di incarico (Semplificate 2026)', suffix: 'mandato' };
+  } else if (form.hasContabilita && form.regimeContabile === 'ordinario'
+             && (form.tipoCliente === 'pf' || form.tipoCliente === 'soc_persone')) {
+    mandatoTask = { b64: TMPL_CONTRATTO, tokens: contTokens,
+      options: { apeRemove: !tantumPresente },
+      label: 'Lettera di incarico (Ordinarie non Srl)', suffix: 'contratto' };
+    warnings.push("Per le Ordinarie non Srl è stato usato il modello di mandato precedente: il nuovo file Word 2026 è in formato .doc e va prima convertito in .docx.");
+  } else if (form.hasContabilita && form.regimeContabile === 'ordinario'
+             && form.tipoCliente === 'soc_capitali') {
+    warnings.push("Mandato per Ordinarie Srl non ancora disponibile: il file Word del consulente è in formato .doc e va convertito in .docx (aprilo in Word e salvalo come .docx nella cartella Template preventivi).");
+  } else {
+    warnings.push("Mandato per Consulenze non ancora disponibile: il file Word del consulente è in formato .doc e va convertito in .docx (aprilo in Word e salvalo come .docx nella cartella Template preventivi).");
+  }
 
   // ── Genera i file e restituisce data-URL per download ──────
   const safe = (cliente||'cliente').replace(/[^a-zA-Z0-9_\-\s]/g,'').trim().replace(/\s+/g,'_').slice(0,30)||'cliente';
 
-  // Generazione documenti.
-  // Per il PREVENTIVO si applicano due trasformazioni XML opzionali:
-  //   - removeTantumBlocks: elimina la sezione una tantum (tabella + dettaglio)
-  //     se la tariffa apertura non è applicata.
-  //   - shiftAnnualSections: se invece la tariffa apertura È applicata, scala
-  //     i numeri di sezione (Contabilità 1.1→1.2, Dichiarazioni 1.2→1.3, ecc.)
-  //     così che 1.1 sia riservato all'apertura.
-  // cleanScontoLabels è sempre attiva: elimina dal layout il decorativo
-  // "del ____ %" che era pensato per uno sconto in percentuale (ora si usa €).
-  const prevDocxOpts = {
-    removeTantumBlocks: !tantumPresente,
-    shiftAnnualSections: tantumPresente,
-    cleanScontoLabels: true,
-    // Le 3 occorrenze di "Mensile/Trimestrale" sono in document order: 1.1
-    // Contabilità → 1.2 Dichiarazioni → 1.3 Modello 770 (la 1.4 Consulenza
-    // non ha colonna Fatturazione, quindi non entra qui).
-    fatturazioneScelte: [
-      form.fatturazioneCont || "",
-      form.fatturazioneDich || "",
-      form.fatturazione770  || "",
-    ],
-  };
-
   const tasks = [
-    fillDocx(TMPL_PREV, prevTokens, prevDocxOpts),
+    fillDocx(tmpl.b64, prevTokens, { transforms: prevTransforms }),
     fillDocx(TMPL_INFO, infoTokens),
   ];
-  if (contrattoApplicabile) tasks.push(
-    fillDocx(TMPL_CONTRATTO, contTokens, {
-      // Rimuove il blocco APE (heading + body sezione apertura + frase
-      // inline nei compensi) quando NON c'è una tariffa apertura attiva.
-      // Quando c'è, lascia il blocco e rimuove solo i marker invisibili.
-      apeRemove: !tantumPresente,
-    })
-  );
+  if (mandatoTask) tasks.push(fillDocx(mandatoTask.b64, mandatoTask.tokens, mandatoTask.options));
 
   const blobs = await Promise.all(tasks);
   const urls  = await Promise.all(blobs.map(blobToDataUrl));
 
   const files = [
-    { url: urls[0], name: `${safe}_preventivo.docx`,  label: 'Preventivo di massima' },
+    { url: urls[0], name: `${safe}_preventivo.docx`,  label: `Preventivo di massima (${tmpl.nome})` },
     { url: urls[1], name: `${safe}_informativa.docx`, label: 'Informativa privacy' },
   ];
-  if (contrattoApplicabile) {
-    files.push({ url: urls[2], name: `${safe}_contratto.docx`, label: 'Lettera di incarico' });
+  if (mandatoTask) {
+    files.push({ url: urls[2], name: `${safe}_${mandatoTask.suffix}.docx`, label: mandatoTask.label });
   }
 
-  return { files, warning: motivoContrattoNonApplicabile };
+  return { files, warning: warnings.length ? warnings.join('\n') : null };
 }
+
+/* ================================================================
+   PROFESSIONISTI DELLO STUDIO — elenco del mandato professionale.
+   Usato per la tendina "Commercialista di riferimento" (Step 1) e per
+   ridurre l'elenco CONFERISCE del mandato al solo professionista scelto.
+   ================================================================ */
+const PROFESSIONISTI = [
+  { nome: "BARES ALESSANDRO",    ordine: "Venezia", num: "310"  },
+  { nome: "BAREA PAOLO",         ordine: "Venezia", num: "512"  },
+  { nome: "CANAL ALDO",          ordine: "Venezia", num: "514"  },
+  { nome: "GIACOMELLO GIANLUCA", ordine: "Venezia", num: "990"  },
+  { nome: "MARANGON RICCARDO",   ordine: "Venezia", num: "1238" },
+  { nome: "NALON PAOLO",         ordine: "Venezia", num: "662"  },
+  { nome: "ZANATTA PAOLO",       ordine: "Treviso", num: "656"  },
+];
 
 const INIT = {
   // Dati cliente (Step 1)
@@ -1769,7 +2036,27 @@ const INIT = {
   // Stato: "" = non scelto (resta "Mensile/Trimestrale" in rosso nel docx),
   // "Mensile" o "Trimestrale" = sostituisce nel docx.
   fatturazioneCont:"", fatturazioneDich:"", fatturazione770:"",
+  // Scelte globali (Step 1) — nuova gestione richiesta dal consulente:
+  // fatturazioneGlobale si applica a TUTTE le righe del preventivo,
+  // pagamentoModo pilota la riga "pagamento 12/4 rid ... – bonifico bancario",
+  // commercialistaRif riduce l'elenco CONFERISCE del mandato al solo scelto.
+  fatturazioneGlobale:"",     // "" | "Mensile" | "Trimestrale"
+  pagamentoModo:"",           // "" | "rid" | "bonifico"
+  commercialistaRif:"",       // "" | nome da PROFESSIONISTI
+  // Domiciliazione postale (riga dedicata nei nuovi template) e flag IRAP
+  hasDomiciliazione:false, tariffaDomiciliazione:"",
+  hasIrap:false,              // dichiarazione IRAP inclusa → "IRAP" in nero nel docx
+  // F24: chi presenta/paga i modelli (pilota i punti del dettaglio 1.1 del docx)
+  // "" = non specificato, "cliente" = invio al cliente che paga,
+  // "studio" = presentazione telematica con addebito c/c via Entratel
+  f24Gestione:"",
+  // Voci libere (nome + importo, tutto manuale). Array di oggetti
+  // { id, nome, importo, gruppo } — gruppo: "Contabilità" | "Dichiarazioni" | "IMU" | "Consulenza"
+  vociLibere:[],
   hasConsulenza:false, consulenzaRicavi:"",
+  // Consulenza: come per le dichiarazioni, scelta tra tariffario (fascia
+  // ricavi) e importo annuo concordato a mano (richiesta del consulente).
+  consulenzaModo:"", consulenzaTariffaBase:"",
   // Consulenza per ricavi oltre 38,7M€: il tariffario non prevede importo fisso,
   // l'utente lo concorda caso per caso e lo inserisce manualmente.
   consulenzaImportoManuale:"",
@@ -2085,14 +2372,21 @@ const TariffaBaseSelector = ({ form, upd, prefix, children, baseLabel = "Importo
   );
 };
 
-const QuadriTable = ({ defs, selected, righe, onToggle, onRiga }) => (
+const QuadriTable = ({ defs, selected, righe, onToggle, onRiga }) => {
+  // Totale progressivo delle voci selezionate (stessa formula di calcUnico)
+  const totale = defs.reduce((s, q) => {
+    if (!q.fixed && !selected[q.id]) return s;
+    const n = q.perRiga ? (parseInt(righe[q.id]) || 1) : 1;
+    return s + q.val * n;
+  }, 0);
+  return (
   <div style={{ border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden", marginTop:8 }}>
     {defs.map((q, i) => {
       const on = q.fixed || !!selected[q.id];
       return (
         <div key={q.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"7px 10px",
           background:i%2===0?C.card:C.cardAlt,
-          borderBottom:i<defs.length-1?`1px solid ${C.border}`:"none" }}>
+          borderBottom:`1px solid ${C.border}` }}>
           <input type="checkbox" checked={on} disabled={q.fixed}
             onChange={()=>!q.fixed&&onToggle(q.id)} style={{ width:14, height:14 }}/>
           <span style={{ flex:1, fontSize:13, color:q.fixed?C.muted:C.text }}>{q.label}</span>
@@ -2107,8 +2401,16 @@ const QuadriTable = ({ defs, selected, righe, onToggle, onRiga }) => (
         </div>
       );
     })}
+    {/* Totale progressivo — si aggiorna man mano che si selezionano le voci */}
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
+      padding:"9px 10px", background:C.groupHeader }}>
+      <span style={{ fontSize:12, fontWeight:700, color:C.primary,
+        textTransform:"uppercase", letterSpacing:"0.05em" }}>Totale voci selezionate</span>
+      <span style={{ fontSize:14, fontWeight:800, color:C.accent }}>{eur(totale)}</span>
+    </div>
   </div>
-);
+  );
+};
 
 /* ================================================================
    BANNER AGGIORNAMENTO TARIFFARIO
@@ -2524,6 +2826,46 @@ function Step1({ form, upd, clientiSalvati = [], clienteAttivoId, onCaricaClient
           onChange={v=>upd("note",v)} placeholder="Codice cliente, annotazioni, ecc."/>
       </Card>
 
+      <Card title="Fatturazione, pagamento e commercialista di riferimento"
+        subtitle="Le scelte compaiono nel preventivo e nel mandato generati" alwaysOpen>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+          <div>
+            <label style={sty.lbl}>Fatturazione</label>
+            <select value={form.fatturazioneGlobale || ""}
+              onChange={e=>upd("fatturazioneGlobale", e.target.value)}
+              style={{ ...sty.inp, padding:"8px 10px" }}>
+              <option value="">— non specificata (resta in rosso nel documento) —</option>
+              <option value="Mensile">Mensile (12 rate)</option>
+              <option value="Trimestrale">Trimestrale (4 rate)</option>
+            </select>
+          </div>
+          <div>
+            <label style={sty.lbl}>Modalità di pagamento</label>
+            <select value={form.pagamentoModo || ""}
+              onChange={e=>upd("pagamentoModo", e.target.value)}
+              style={{ ...sty.inp, padding:"8px 10px" }}>
+              <option value="">— non specificata (resta in rosso nel documento) —</option>
+              <option value="rid">Addebito RID / S.D.D. in conto corrente</option>
+              <option value="bonifico">Bonifico bancario</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label style={sty.lbl}>Commercialista di riferimento (per il mandato)</label>
+          <select value={form.commercialistaRif || ""}
+            onChange={e=>upd("commercialistaRif", e.target.value)}
+            style={{ ...sty.inp, padding:"8px 10px" }}>
+            <option value="">— non specificato (il mandato mantiene l'elenco completo) —</option>
+            {PROFESSIONISTI.map(p => (
+              <option key={p.nome} value={p.nome}>{p.nome}</option>
+            ))}
+          </select>
+          <p style={{ margin:"8px 0 0", fontSize:12, color:C.muted }}>
+            Se scelto, la lettera di incarico viene intestata solo al professionista selezionato.
+          </p>
+        </div>
+      </Card>
+
       <Card title="Compenso 1.1 – Apertura ditta / Costituzione società (una tantum)"
         subtitle="Opzionale — solo se prevista consulenza apertura"
         enabled={form.hasTariffaApertura}
@@ -2625,9 +2967,18 @@ function Step2({ form, upd, T }) {
           </div>
         )}
         {form.regimeContabile==="forfettario" && (
-          <p style={{ fontSize:13, color:C.muted, margin:0 }}>
-            Tariffa annua fissa: <strong style={{ color:C.accent }}>{eur(T.contabilita.forfettaria)}</strong>
-          </p>
+          <>
+            <p style={{ fontSize:13, color:C.muted, margin:"0 0 10px" }}>
+              Tariffa annua fissa: <strong style={{ color:C.accent }}>{eur(T.contabilita.forfettaria)}</strong>
+            </p>
+            <Inp label="Numero documenti contabili annui (per il documento: “Fino a N documenti”)"
+              value={form.nDocumenti}
+              onChange={v=>upd("nDocumenti",v)} type="number" placeholder="Es. 50" min="1"/>
+            <p style={{ margin:"6px 0 0", fontSize:12, color:C.muted, fontStyle:"italic" }}>
+              Non incide sulla tariffa (che resta fissa): serve solo a compilare la riga
+              "Fino a … documenti contabili" nel preventivo stampato.
+            </p>
+          </>
         )}
         {form.regimeContabile==="semplificato" && (
           <>
@@ -2882,6 +3233,27 @@ function Step3({ form, upd, T }) {
         </TariffaBaseSelector>
       </Card>
 
+      {/* Chi presenta/paga gli F24 — non incide sul calcolo: pilota i punti
+          del "Dettaglio 1.1" nel preventivo .docx (invio al cliente vs
+          presentazione telematica con addebito in c/c). Visibile sempre,
+          anche senza la card tariffa F24 attiva. */}
+      <Card title="Gestione modelli F24 (per il documento)" alwaysOpen
+        subtitle="Determina quale dicitura compare nel dettaglio del preventivo stampato">
+        <Radio value={form.f24Gestione||""} onChange={v=>upd("f24Gestione",v)} options={[
+          {val:"cliente", label:"F24 inviati al cliente — pagamento a cura del Cliente"},
+          {val:"studio",  label:"Presentazione telematica dello Studio con addebito sul c/c del Cliente (Entratel)"},
+          {val:"",        label:"Non specificato (il documento mantiene entrambe le diciture)"},
+        ]}/>
+      </Card>
+
+      {/* Dichiarazione IRAP inclusa o no — pilota il colore della parola
+          "IRAP" nei nuovi template (nero se inclusa, rosso se no). */}
+      <Card title="Dichiarazione IRAP (per il documento)" alwaysOpen
+        subtitle="Se inclusa, nel preventivo stampato “IRAP” appare in nero; altrimenti resta in rosso">
+        <Chk label="La predisposizione e l'invio della dichiarazione IRAP sono inclusi nell'incarico"
+          checked={form.hasIrap} onChange={()=>upd("hasIrap",!form.hasIrap)}/>
+      </Card>
+
       {elig.sistemats ? (
         <Card title="Sistema Tessera Sanitaria" subtitle={`Importo fisso ${eur(T.sistemats)}`}
           enabled={form.hasSistemaTS} onToggle={()=>upd("hasSistemaTS",!form.hasSistemaTS)}>
@@ -3109,8 +3481,9 @@ function Step4({ form, upd, T }) {
         </Card>
       )}
 
-      <Card title="Consulenza" subtitle="Importo fisso per fascia di ricavi"
+      <Card title="Consulenza" subtitle="Fascia di ricavi dal tariffario, oppure importo concordato a mano"
         enabled={form.hasConsulenza} onToggle={()=>upd("hasConsulenza",!form.hasConsulenza)}>
+        <TariffaBaseSelector form={form} upd={upd} prefix="consulenza">
         <Inp label="Ricavi annui del cliente (€)" value={form.consulenzaRicavi}
           onChange={v=>{
             upd("consulenzaRicavi",v);
@@ -3165,6 +3538,68 @@ function Step4({ form, upd, T }) {
             </tr>
           </tbody>
         </table>
+        </TariffaBaseSelector>
+      </Card>
+
+      {/* Domiciliazione postale — riga dedicata nei nuovi template di preventivo
+          ("Servizio annuale di domiciliazione postale"). Importo sempre manuale. */}
+      <Card title="Servizio annuale di domiciliazione postale"
+        subtitle="Importo da concordare — compare come riga dedicata nel preventivo"
+        enabled={form.hasDomiciliazione}
+        onToggle={()=>upd("hasDomiciliazione",!form.hasDomiciliazione)}>
+        <Inp label="Importo annuo concordato (€)" value={form.tariffaDomiciliazione}
+          onChange={v=>upd("tariffaDomiciliazione",v)} type="number" min="0"
+          placeholder="Es. 300"/>
+        <p style={{ margin:"8px 0 0", fontSize:12, color:C.muted }}>
+          Ricevimento della corrispondenza ordinaria, raccomandata e giudiziaria presso la sede dello Studio.
+        </p>
+      </Card>
+
+      {/* Voci libere — nome e importo tutti manuali, con scelta del gruppo
+          del preventivo in cui la voce deve confluire. */}
+      <Card title="Voci libere (nome e importo manuali)"
+        subtitle="Per prestazioni non previste dal tariffario" alwaysOpen>
+        {(form.vociLibere || []).map((v, i) => (
+          <div key={v.id} style={{ display:"grid",
+            gridTemplateColumns:"2fr 1fr 1fr auto", gap:8, alignItems:"end", marginBottom:8 }}>
+            <Inp label={i===0?"Descrizione voce":""} value={v.nome}
+              onChange={val=>{
+                const arr=[...form.vociLibere]; arr[i]={...arr[i], nome:val}; upd("vociLibere",arr);
+              }} placeholder="Es. Pratica cassetto fiscale"/>
+            <Inp label={i===0?"Importo (€)":""} value={v.importo}
+              onChange={val=>{
+                const arr=[...form.vociLibere]; arr[i]={...arr[i], importo:val}; upd("vociLibere",arr);
+              }} type="number" min="0" placeholder="0"/>
+            <div>
+              {i===0 && <label style={sty.lbl}>Sezione</label>}
+              <select value={v.gruppo||"Consulenza"}
+                onChange={e=>{
+                  const arr=[...form.vociLibere]; arr[i]={...arr[i], gruppo:e.target.value}; upd("vociLibere",arr);
+                }}
+                style={{ ...sty.inp, padding:"8px 10px" }}>
+                <option value="Contabilità">1.1 Contabilità</option>
+                <option value="Dichiarazioni">1.2 Dichiarazioni</option>
+                <option value="IMU">IMU</option>
+                <option value="Consulenza">1.4 Consulenza</option>
+              </select>
+            </div>
+            <button onClick={()=>{
+                const arr=form.vociLibere.filter((_,j)=>j!==i); upd("vociLibere",arr);
+              }}
+              title="Rimuovi questa voce"
+              style={{ padding:"8px 12px", borderRadius:6, border:`1px solid ${C.border}`,
+                background:C.card, color:C.warn, cursor:"pointer", fontWeight:700 }}>✕</button>
+          </div>
+        ))}
+        <button onClick={()=>{
+            const arr=[...(form.vociLibere||[]),
+              { id:`vl_${Date.now()}_${Math.floor(Math.random()*1e4)}`, nome:"", importo:"", gruppo:"Consulenza" }];
+            upd("vociLibere",arr);
+          }}
+          style={{ padding:"8px 14px", borderRadius:6, border:`1px dashed ${C.accent}`,
+            background:"transparent", color:C.accent, cursor:"pointer", fontWeight:600, fontSize:13 }}>
+          + Aggiungi voce libera
+        </button>
       </Card>
 
       <Card title="Servizi Extra – Allegato A" alwaysOpen>
@@ -3363,16 +3798,25 @@ function Step4({ form, upd, T }) {
 /* ================================================================
    STEP 5 – RIEPILOGO
    ================================================================ */
-function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, docLinks, genWarning }) {
+function Step5({ items, total, form, upd, T, onReset, onSalva, salvato, onGeneraDocs, genLoading, docLinks, genWarning }) {
   return (
     <div>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
         <h2 style={{ color:C.primary, margin:0 }}>Riepilogo Preventivo</h2>
-        <div style={{ display:"flex", gap:8 }}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           <button onClick={onReset}
             style={{ padding:"8px 14px", borderRadius:6, border:`1px solid ${C.border}`,
               background:C.card, color:C.text, cursor:"pointer", fontSize:13 }}>
             ↩ Nuovo
+          </button>
+          <button onClick={onSalva}
+            title="Salva il preventivo completo (riapribile e modificabile in seguito)"
+            style={{ padding:"8px 14px", borderRadius:6,
+              border:salvato?`1px solid ${C.successBorder}`:"none",
+              background:salvato?C.successBg:C.accent,
+              color:salvato?C.success:"white", cursor:"pointer",
+              fontSize:13, fontWeight:700 }}>
+            {salvato ? "✓ Preventivo salvato" : "💾 Salva preventivo"}
           </button>
           <button onClick={()=>window.print()}
             style={{ padding:"8px 14px", background:C.card, color:C.primary,
@@ -3402,7 +3846,7 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
         </div>
         {form.note && <div style={{ fontSize:13, color:C.muted, marginTop:3 }}>Note: {form.note}</div>}
         <div style={{ fontSize:12, color:C.muted, marginTop:3 }}>
-          {T.fonte} · Importi al netto di IVA e cassa di legge
+          {T.fonte} · Oltre iva e cassa di previdenza ad aliquota di legge
         </div>
       </div>
 
@@ -3432,8 +3876,8 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
               display:"flex", gap:10, alignItems:"flex-start" }}>
               <span style={{ fontSize:18, flexShrink:0 }}>⚠️</span>
               <div>
-                <strong>Lettera di incarico non generata.</strong><br/>
-                <span style={{ fontSize:12 }}>{genWarning}</span>
+                <strong>Avvisi sulla generazione:</strong><br/>
+                <span style={{ fontSize:12, whiteSpace:"pre-line" }}>{genWarning}</span>
               </div>
             </div>
           )}
@@ -3494,38 +3938,19 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
         );
       })()}
 
-      {/* ── Selettore Fatturazione (Mensile / Trimestrale) per ognuna delle
-            3 sezioni numerate del Preventivo che hanno la colonna omonima.
-            Se una scelta resta vuota, il .docx mostrerà "Mensile/Trimestrale"
-            in rosso (default storico del template). */}
+      {/* ── Promemoria fatturazione/pagamento: le scelte si fanno nello Step 1
+            (richiesta del consulente). Qui solo un riepilogo non modificabile. */}
       {items.length>0 && (
-        <div style={{ marginBottom:16, padding:"12px 16px", background:C.card,
-          border:`1px solid ${C.border}`, borderRadius:10 }}>
-          <div style={{ fontSize:11, fontWeight:700, color:C.primary,
-            textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:10 }}>
-            Fatturazione delle voci ricorrenti
-          </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:12 }}>
-            {[
-              { campo:"fatturazioneCont", label:"Contabilità (1.1 / 1.2)" },
-              { campo:"fatturazioneDich", label:"Dichiarazioni" },
-              { campo:"fatturazione770",  label:"Modello 770" },
-            ].map(({campo, label}) => (
-              <div key={campo}>
-                <label style={{ ...sty.lbl, fontSize:11.5, color:C.muted, marginBottom:4 }}>{label}</label>
-                <select value={form[campo] || ""}
-                  onChange={e => upd(campo, e.target.value)}
-                  style={{ ...sty.inp, padding:"6px 8px", fontSize:13 }}>
-                  <option value="">— non specificato —</option>
-                  <option value="Mensile">Mensile</option>
-                  <option value="Trimestrale">Trimestrale</option>
-                </select>
-              </div>
-            ))}
-          </div>
-          <p style={{ margin:"8px 0 0", fontSize:11, color:C.muted }}>
-            Se non scegli, il preventivo .docx mostrerà "Mensile/Trimestrale" in rosso (placeholder).
-          </p>
+        <div style={{ marginBottom:16, padding:"10px 16px", background:C.card,
+          border:`1px solid ${C.border}`, borderRadius:10, fontSize:13, color:C.muted,
+          display:"flex", gap:24, flexWrap:"wrap" }}>
+          <span>Fatturazione: <strong style={{ color:form.fatturazioneGlobale?C.text:C.warn }}>
+            {form.fatturazioneGlobale || "non specificata (resta in rosso nel documento)"}</strong></span>
+          <span>Pagamento: <strong style={{ color:form.pagamentoModo?C.text:C.warn }}>
+            {form.pagamentoModo==="rid" ? "Addebito RID / S.D.D." :
+             form.pagamentoModo==="bonifico" ? "Bonifico bancario" :
+             "non specificato (resta in rosso nel documento)"}</strong></span>
+          <span style={{ fontSize:12, fontStyle:"italic" }}>(si modificano nello Step 1)</span>
         </div>
       )}
 
@@ -3552,10 +3977,13 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
               </thead>
               <tbody>
                 {(() => {
+                  // Sotto-righe (item.sub, es. dettaglio quadri) escluse dal
+                  // riepilogo su richiesta del consulente: si mostra solo il
+                  // totale di ogni voce.
                   const rows = [];
                   let lastGrp = null;
-                  items.forEach((item, i) => {
-                    const showGrp = !item.sub && item.group && item.group !== lastGrp;
+                  items.filter(item => !item.sub).forEach((item, i) => {
+                    const showGrp = item.group && item.group !== lastGrp;
                     if (showGrp) {
                       lastGrp = item.group;
                       rows.push(
@@ -3568,18 +3996,17 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
                       );
                     }
                     rows.push(
-                      <tr key={`row-${i}`} style={{ background:item.sub?C.cardAlt:i%2===0?C.card:C.zebra,
+                      <tr key={`row-${i}`} style={{ background:i%2===0?C.card:C.zebra,
                         borderBottom:`1px solid ${C.border}` }}>
-                        <td style={{ padding:item.sub?"4px 14px 4px 28px":"10px 14px",
-                          fontSize:item.sub?12:14, color:item.sub?C.muted:C.text }}>
+                        <td style={{ padding:"10px 14px", fontSize:14, color:C.text }}>
                           {item.label}
                         </td>
                         <td style={{ padding:"4px 14px", fontSize:11, color:C.muted }}>
-                          {!item.sub && item.detail}
+                          {item.detail}
                         </td>
-                        <td style={{ padding:item.sub?"4px 14px":"10px 14px", textAlign:"right",
-                          fontWeight:item.sub?400:600, fontSize:item.sub?12:14,
-                          color:item.val===0&&item.detail?.includes("⚠")?C.warn:item.sub?C.muted:C.text }}>
+                        <td style={{ padding:"10px 14px", textAlign:"right",
+                          fontWeight:600, fontSize:14,
+                          color:item.val===0&&item.detail?.includes("⚠")?C.warn:C.text }}>
                           {item.val===0&&item.detail?.includes("⚠")?"da inserire":eur(item.val)}
                         </td>
                       </tr>
@@ -3590,7 +4017,9 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
               </tbody>
               <tfoot>
                 <tr style={{ background:C.primary, color:"white" }}>
-                  <td colSpan={2} style={{ padding:"13px 14px", fontWeight:700, fontSize:16 }}>TOTALE ONORARIO</td>
+                  <td colSpan={2} style={{ padding:"13px 14px", fontWeight:700, fontSize:15 }}>
+                    Compenso totale preventivato su base annua
+                  </td>
                   <td style={{ padding:"13px 14px", textAlign:"right", fontWeight:700, fontSize:18 }}>{eur(total)}</td>
                 </tr>
                 <tr style={{ background:C.footerDark, color:"rgba(255,255,255,0.92)" }}>
@@ -3614,7 +4043,9 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
                   </td>
                 </tr>
                 <tr style={{ background:C.footerDarker, color:"white" }}>
-                  <td colSpan={2} style={{ padding:"10px 14px", fontWeight:700, fontSize:14 }}>TOTALE FINALE</td>
+                  <td colSpan={2} style={{ padding:"10px 14px", fontWeight:700, fontSize:14 }}>
+                    Compenso totale dovuto su base annua
+                  </td>
                   <td style={{ padding:"10px 14px", textAlign:"right", fontWeight:700, fontSize:17 }}>
                     {eur(Math.max(0, total - (parseFloat(form.scontoConcordato) || 0)))}
                   </td>
@@ -3623,7 +4054,7 @@ function Step5({ items, total, form, upd, T, onReset, onGeneraDocs, genLoading, 
             </table>
           </div>
           <p style={{ fontSize:12, color:C.muted, textAlign:"center", marginTop:8 }}>
-            {T.fonte} · Importi al netto di IVA e cassa di legge
+            {T.fonte} · Oltre iva e cassa di previdenza ad aliquota di legge
           </p>
         </>
       )}
@@ -3966,6 +4397,54 @@ function ModaleConfermaSalva({ onSi, onNo }) {
   );
 }
 
+/* Modale "Chiudi preventivo": permette di chiudere il preventivo in corso
+   senza chiudere l'app — con scelta esplicita se salvare prima.
+   salvabile=false quando manca l'identità minima (il salvataggio fallirebbe). */
+function ModaleChiudiPreventivo({ salvabile, onSalvaEChiudi, onChiudiSenzaSalvare, onAnnulla }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:C.overlay, zIndex:1000,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+      <div style={{ background:C.card, borderRadius:12, maxWidth:480, width:"100%",
+        boxShadow:"0 20px 60px rgba(0,0,0,0.3)", padding:"24px 28px" }}>
+        <div style={{ fontSize:40, textAlign:"center", marginBottom:12 }}>📂</div>
+        <h3 style={{ margin:"0 0 10px", textAlign:"center", color:C.primary, fontSize:18 }}>
+          Chiudere questo preventivo?
+        </h3>
+        <p style={{ margin:0, textAlign:"center", fontSize:14, color:C.muted, lineHeight:1.5 }}>
+          Il preventivatore torna vuoto, pronto per un nuovo cliente. L'app resta aperta.
+          {!salvabile && (
+            <><br/><span style={{ fontSize:12, color:C.warn }}>
+              (Per salvare servono almeno nome e cognome, CF o P.IVA)
+            </span></>
+          )}
+        </p>
+        <div style={{ display:"flex", gap:10, marginTop:22, justifyContent:"center", flexWrap:"wrap" }}>
+          <button onClick={onAnnulla}
+            style={{ padding:"10px 20px", background:C.card, color:C.text,
+              border:`1px solid ${C.border}`, borderRadius:6, cursor:"pointer",
+              fontWeight:600, fontSize:14 }}>
+            Annulla
+          </button>
+          <button onClick={onChiudiSenzaSalvare}
+            style={{ padding:"10px 20px", background:C.card, color:C.warn,
+              border:`1px solid ${C.warnBorder}`, borderRadius:6, cursor:"pointer",
+              fontWeight:600, fontSize:14 }}>
+            Chiudi senza salvare
+          </button>
+          {salvabile && (
+            <button onClick={onSalvaEChiudi}
+              style={{ padding:"10px 20px", background:C.accent, color:"white",
+                border:"none", borderRadius:6, cursor:"pointer",
+                fontWeight:700, fontSize:14, boxShadow:`0 2px 6px ${C.shadow}` }}>
+              💾 Salva e chiudi
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* Modale di conferma al "Vedi Riepilogo" quando la percentuale di riduzione
    immobiliare è fuori dal range 20-50% raccomandato dal tariffario BCB.
    Stile allineato a ModaleConfermaSalva per coerenza UX. */
@@ -4027,9 +4506,23 @@ export default function App() {
   const [clienteAttivoId, setClienteAttivoId] = useState(null);   // id cliente già caricato
   const [modaleSalvaApri, setModaleSalvaApri] = useState(false); // modale pre-avanti
   const [modaleRiduzioneApri, setModaleRiduzioneApri] = useState(false); // modale conferma riduzione fuori 20-50
+  const [modaleChiudiApri, setModaleChiudiApri] = useState(false); // modale chiudi preventivo
 
   const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const { items, total } = useMemo(() => calcAll(form, T), [form, T]);
+
+  // C'è un preventivo "in corso"? (form diverso dallo stato iniziale)
+  const preventivoInCorso = useMemo(
+    () => JSON.stringify(form) !== JSON.stringify(INIT), [form]);
+
+  // Riporta il preventivatore allo stato iniziale senza chiudere l'app
+  const resetPreventivo = () => {
+    setForm(INIT);
+    setStep(0);
+    setClienteAttivoId(null);
+    setDocLinks(null);
+    setGenWarning(null);
+  };
 
   // Applica le CSS variables al :root al cambio tema
   useEffect(() => {
@@ -4101,7 +4594,10 @@ export default function App() {
     setGenLoading(false);
   };
 
-  // Salva il cliente corrente in memoria persistente.
+  // Salva il PREVENTIVO COMPLETO in memoria persistente: oltre all'anagrafica
+  // (mantenuta al primo livello per le etichette della lista e per la
+  // retrocompatibilità), viene salvato uno snapshot integrale del form in
+  // `_form`, così il preventivo si può riaprire e modificare in ogni sua parte.
   // Ritorna true in caso di successo, false se manca l'identità minima.
   const salvaClienteCorrente = async () => {
     const key = chiaveCliente(form);
@@ -4109,7 +4605,7 @@ export default function App() {
       alert("Impossibile salvare: inserire almeno nome e cognome, o Codice Fiscale, o Partita IVA.");
       return false;
     }
-    const data = { _updatedAt: Date.now() };
+    const data = { _updatedAt: Date.now(), _form: { ...form } };
     for (const k of CAMPI_CLIENTE) data[k] = form[k] ?? "";
     try {
       await window.storage.set(key, JSON.stringify(data));
@@ -4122,16 +4618,23 @@ export default function App() {
     }
   };
 
-  // Carica un cliente salvato nel form corrente. Azzera anche i campi documento
-  // per evitare di portarsi dietro date e compensi del preventivo precedente.
+  // Carica un preventivo salvato nel form corrente.
+  // - Salvataggi nuovi (con `_form`): ripristina TUTTO lo snapshot (steps 1-5),
+  //   sopra INIT così i campi introdotti dopo il salvataggio hanno il default.
+  // - Salvataggi vecchi (solo anagrafica): comportamento storico — carica i
+  //   campi anagrafici e azzera i campi documento.
   const caricaCliente = (cliente) => {
-    const patch = {};
-    for (const k of CAMPI_CLIENTE) patch[k] = cliente[k] ?? "";
-    patch.dataDocumento = "";
-    patch.note = "";
-    patch.hasTariffaApertura = false;
-    patch.tariffaApertura = "";
-    setForm(f => ({ ...f, ...patch }));
+    if (cliente._form && typeof cliente._form === "object") {
+      setForm({ ...INIT, ...cliente._form });
+    } else {
+      const patch = {};
+      for (const k of CAMPI_CLIENTE) patch[k] = cliente[k] ?? "";
+      patch.dataDocumento = "";
+      patch.note = "";
+      patch.hasTariffaApertura = false;
+      patch.tariffaApertura = "";
+      setForm(f => ({ ...f, ...patch }));
+    }
     setClienteAttivoId(cliente._key);
   };
 
@@ -4147,12 +4650,20 @@ export default function App() {
     }
   };
 
-  // Se l'utente modifica i dati del cliente dopo averlo caricato, azzeriamo
-  // l'ID attivo perché i dati potrebbero non corrispondere più.
+  // Se l'utente modifica il preventivo dopo averlo caricato/salvato, azzeriamo
+  // l'ID attivo perché i dati in memoria non corrispondono più.
+  // Con lo snapshot completo il confronto copre tutti gli step, non solo
+  // l'anagrafica; per i salvataggi vecchi (senza _form) resta il confronto
+  // sui soli campi anagrafici.
   useEffect(() => {
     if (!clienteAttivoId) return;
     const corrente = clientiSalvati.find(c => c._key === clienteAttivoId);
     if (!corrente) { setClienteAttivoId(null); return; }
+    if (corrente._form && typeof corrente._form === "object") {
+      const salvato = JSON.stringify({ ...INIT, ...corrente._form });
+      if (salvato !== JSON.stringify(form)) setClienteAttivoId(null);
+      return;
+    }
     for (const k of CAMPI_CLIENTE) {
       if ((corrente[k] ?? "") !== (form[k] ?? "")) {
         setClienteAttivoId(null);
@@ -4177,7 +4688,7 @@ export default function App() {
     // Step 3 → 4: verifica Consulenza oltre soglia massima scaglioni (38,7M€).
     // Per ricavi oltre €38.734.267,42 il tariffario non prevede importo fisso:
     // l'utente deve aver inserito manualmente l'importo concordato.
-    if (step === 3 && form.hasConsulenza) {
+    if (step === 3 && form.hasConsulenza && form.consulenzaModo !== "base") {
       const r = parseNum(form.consulenzaRicavi);
       const sogliaMax = T.consulenza[T.consulenza.length - 2].max; // 38.734.267,42
       if (r > sogliaMax && parseNum(form.consulenzaImportoManuale) <= 0) {
@@ -4200,13 +4711,10 @@ export default function App() {
     }
   };
 
-  // Carica JSZip + tariffario salvato (priorità: editor JSON → storage legacy)
+  // Carica il tariffario salvato (priorità: editor JSON → storage legacy).
+  // JSZip è importato staticamente dal bundle: la generazione documenti
+  // funziona anche senza connessione internet.
   useEffect(() => {
-    if (!window.JSZip) {
-      const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
-      document.head.appendChild(s);
-    }
     (async () => {
       try {
         // 1) Priorità: tariffario JSON dell'editor (Electron app)
@@ -4314,7 +4822,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Destra: totale + toggle tema */}
+        {/* Destra: totale + chiudi preventivo + toggle tema */}
         <div style={{ display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
           {total > 0 && (
             <div style={{ textAlign:"right",
@@ -4330,6 +4838,17 @@ export default function App() {
                 {eur(total)}
               </div>
             </div>
+          )}
+          {preventivoInCorso && (
+            <button onClick={() => setModaleChiudiApri(true)}
+              title="Chiudi il preventivo in corso (l'app resta aperta)"
+              style={{ padding:"9px 14px", borderRadius:8,
+                background:"rgba(255,255,255,0.08)",
+                border:"1px solid rgba(255,255,255,0.25)",
+                color:C.headerText, cursor:"pointer", fontWeight:600, fontSize:13,
+                display:"flex", alignItems:"center", gap:6 }}>
+              <span>✕</span><span>Chiudi preventivo</span>
+            </button>
           )}
           <ThemeToggle mode={themeMode} onChange={setThemeMode}/>
         </div>
@@ -4373,7 +4892,9 @@ export default function App() {
         {step===2 && <Step3 form={form} upd={upd} T={T}/>}
         {step===3 && <Step4 form={form} upd={upd} T={T}/>}
         {step===4 && <Step5 items={items} total={total} form={form} upd={upd} T={T}
-          onReset={()=>{setForm(INIT);setStep(0);setClienteAttivoId(null);}}
+          onReset={resetPreventivo}
+          onSalva={salvaClienteCorrente}
+          salvato={!!clienteAttivoId}
           onGeneraDocs={handleGeneraDocs} genLoading={genLoading} docLinks={docLinks} genWarning={genWarning}/>}
 
         {/* NAVIGAZIONE */}
@@ -4416,6 +4937,25 @@ export default function App() {
           }}
           onNo={() => setModaleRiduzioneApri(false)}/>
       )}
+
+      {/* Modale chiudi preventivo: salva e chiudi / chiudi senza salvare / annulla */}
+      {modaleChiudiApri && (
+        <ModaleChiudiPreventivo
+          salvabile={!!identitaCliente(form)}
+          onSalvaEChiudi={async () => {
+            const ok = await salvaClienteCorrente();
+            setModaleChiudiApri(false);
+            if (ok !== false) resetPreventivo();
+          }}
+          onChiudiSenzaSalvare={() => { setModaleChiudiApri(false); resetPreventivo(); }}
+          onAnnulla={() => setModaleChiudiApri(false)}/>
+      )}
     </div>
   );
 }
+
+/* ================================================================
+   EXPORT DI SERVIZIO — usati dai test automatici (harness Node) e
+   potenzialmente da altre finestre. Non influiscono sull'app.
+   ================================================================ */
+export { calcAll, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
