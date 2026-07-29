@@ -863,9 +863,26 @@ function calcAll(form, T) {
     return { usaBase: true, val: v, det: "Tariffa Base concordata" };
   };
 
+  // Importo personalizzato di una voce extra: se l'utente ha inserito un
+  // valore in form.extraOverrides[chiave], sostituisce la tariffa standard
+  // (per le voci a quantità sostituisce l'importo UNITARIO).
+  const exOvr = (key, std) => {
+    const v = parseNum((form.extraOverrides || {})[key]);
+    return v > 0 ? v : std;
+  };
+  const exDet = (key, det) =>
+    parseNum((form.extraOverrides || {})[key]) > 0 ? `${det} — importo personalizzato` : det;
+
   if (form.hasContabilita) {
     const ct = T.contabilita;
-    if (form.regimeContabile === "forfettario") {
+    const labelReg = form.regimeContabile === "forfettario" ? "Contabilità Forfettaria"
+                   : form.regimeContabile === "semplificato" ? "Contabilità Semplificata"
+                   : form.regimeContabile === "ordinario"    ? "Contabilità Ordinaria" : "Contabilità";
+    const tbCont = tariffaBase("cont");
+    if (tbCont.usaBase && form.regimeContabile) {
+      // Importo annuo concordato a mano (sostituisce il calcolo del tariffario)
+      add(labelReg, tbCont.val, tbCont.det, "Contabilità");
+    } else if (form.regimeContabile === "forfettario") {
       add("Contabilità Forfettaria", ct.forfettaria, "Importo annuo fisso", "Contabilità");
     } else if (form.regimeContabile === "semplificato") {
       const n = parseInt(form.nDocumenti) || 0;
@@ -886,10 +903,10 @@ function calcAll(form, T) {
   // adempimenti societari, camerali e di chiusura ciclo contabile annuale.
   {
     const A = T.allegatoA;
-    if (form.extraVarCCIAA)   add("Variazioni dati CCIAA",           A.variazioniCCIAA, "Per pratica", "Contabilità");
-    if (form.extraBilancioRI) add("Invio telematico Bilancio al RI", A.invioBilancioRI, "Per invio",   "Contabilità");
+    if (form.extraVarCCIAA)   add("Variazioni dati CCIAA",           exOvr("varCCIAA", A.variazioniCCIAA), exDet("varCCIAA", "Per pratica"), "Contabilità");
+    if (form.extraBilancioRI) add("Invio telematico Bilancio al RI", exOvr("bilancioRI", A.invioBilancioRI), exDet("bilancioRI", "Per invio"),   "Contabilità");
     if (form.extraLibri)      add(`Vidimazione libri sociali (×${parseInt(form.nLibri)||1})`,
-                                  A.vidimLibri*(parseInt(form.nLibri)||1), "Per libro", "Contabilità");
+                                  exOvr("vidimLibri", A.vidimLibri)*(parseInt(form.nLibri)||1), exDet("vidimLibri", "Per libro"), "Contabilità");
   }
 
   // ── Adempimenti contabili EXTRA dal foglio CONTABILITA (R25-R42)
@@ -898,20 +915,22 @@ function calcAll(form, T) {
     const CE = T.contExtra;
     if (form.extraFattElettr) {
       const n = parseInt(form.nFattElettr) || 0;
-      add(`Fattura elettronica (×${n})`, CE.fattElettr * n,
-        `${n} fatture × ${eur(CE.fattElettr)}`, "Contabilità");
+      const u = exOvr("fattElettr", CE.fattElettr);
+      add(`Fattura elettronica (×${n})`, u * n,
+        exDet("fattElettr", `${n} fatture × ${eur(u)}`), "Contabilità");
     }
     if (form.extraXMLMensile) {
       const n = parseInt(form.nXMLMensile) || 0;
-      add(`Invio XML mensile TD17/18/20 (×${n})`, CE.xmlMensile * n,
-        `${n} invii × ${eur(CE.xmlMensile)}`, "Contabilità");
+      const u = exOvr("xmlMensile", CE.xmlMensile);
+      add(`Invio XML mensile TD17/18/20 (×${n})`, u * n,
+        exDet("xmlMensile", `${n} invii × ${eur(u)}`), "Contabilità");
     }
-    if (form.extraMaggiorCorr)        add("Maggiorazione recupero corrispettivi",    CE.maggiorCorr,        "Importo fisso annuo", "Contabilità");
-    if (form.extraSituazContabile)    add("Situazione contabile periodica",           CE.situazContabile,    "Per situazione",      "Contabilità");
-    if (form.extraSituazPatrimoniale) add("Situazione patrimoniale periodica",        CE.situazPatrimoniale, "Per situazione",      "Contabilità");
-    if (form.extraLiquidIVAMensili)   add("Liquidazioni IVA mensili",                 CE.liquidIVAMensili,   "Importo fisso",       "Contabilità");
-    if (form.extraLiquidIVATrim)      add("Liquidazioni IVA trimestrali",             CE.liquidIVATrim,      "Importo fisso",       "Contabilità");
-    if (form.extraImportXML)          add("Importazione XML fatture (SDI)",           CE.importXML,          "Importo fisso",       "Contabilità");
+    if (form.extraMaggiorCorr)        add("Maggiorazione recupero corrispettivi",    exOvr("maggiorCorr", CE.maggiorCorr),        exDet("maggiorCorr", "Importo fisso annuo"), "Contabilità");
+    if (form.extraSituazContabile)    add("Situazione contabile periodica",           exOvr("situazContabile", CE.situazContabile),    exDet("situazContabile", "Per situazione"),      "Contabilità");
+    if (form.extraSituazPatrimoniale) add("Situazione patrimoniale periodica",        exOvr("situazPatrimoniale", CE.situazPatrimoniale), exDet("situazPatrimoniale", "Per situazione"),      "Contabilità");
+    if (form.extraLiquidIVAMensili)   add("Liquidazioni IVA mensili",                 exOvr("liquidIVAMensili", CE.liquidIVAMensili),   exDet("liquidIVAMensili", "Importo fisso"),       "Contabilità");
+    if (form.extraLiquidIVATrim)      add("Liquidazioni IVA trimestrali",             exOvr("liquidIVATrim", CE.liquidIVATrim),      exDet("liquidIVATrim", "Importo fisso"),       "Contabilità");
+    if (form.extraImportXML)          add("Importazione XML fatture (SDI)",           exOvr("importXML", CE.importXML),          exDet("importXML", "Importo fisso"),       "Contabilità");
   }
 
   // ── Bilancio SRL — nei nuovi template 2026 ha una RIGA DEDICATA
@@ -922,7 +941,12 @@ function calcAll(form, T) {
   // Composizione: due addendi indipendenti, sommabili.
   //   A) Calcolo progressivo su ricavi + attivo (con minimo art. 34 a pavimento)
   //   B) Tariffa fissa per anno (storicoMinimi) attivabile in aggiunta
-  if (form.hasBilancio) {
+  if (form.hasBilancio && tariffaBase("bilancio").usaBase) {
+    // Importo concordato a mano: sostituisce sia il calcolo su ricavi+attivo
+    // sia l'eventuale tariffa fissa per anno.
+    const tb = tariffaBase("bilancio");
+    add("Bilancio SRL", tb.val, tb.det, "Bilancio");
+  } else if (form.hasBilancio) {
     const ricavi = parseNum(form.bilancioRicavi), attivo = parseNum(form.bilancioAttivo);
     // Calcolo PROGRESSIVO per scaglioni (come IRPEF / art. 22 DM 140/2012).
     // Ogni fascia applica la propria aliquota SOLO alla parte di valore che
@@ -975,6 +999,19 @@ function calcAll(form, T) {
     }
   }
 
+  // LIPE IVA di Gruppo — voce separata dalle LIPE ordinarie: stessa tariffa
+  // unitaria del tariffario, conteggio proprio (caso APE: 4 + 4 invii).
+  if (form.hasLipeGruppo) {
+    const tb = tariffaBase("lipeGruppo");
+    if (tb.usaBase) {
+      add("LIPE IVA di Gruppo – Comunicazioni Periodiche", tb.val, tb.det, "Dichiarazioni");
+    } else {
+      const n = Math.min(4, Math.max(1, parseInt(form.nInviiLipeGruppo) || 1));
+      add("LIPE IVA di Gruppo – Comunicazioni Periodiche", T.lipe * n,
+        `${n} invii × ${eur(T.lipe)} (liquidazione IVA di gruppo)`, "Dichiarazioni");
+    }
+  }
+
   if (form.hasDichIVA) {
     const tb = tariffaBase("dichIva");
     if (tb.usaBase) add("Dichiarazione Annuale IVA", tb.val, tb.det, "Dichiarazioni");
@@ -1023,12 +1060,13 @@ function calcAll(form, T) {
   // ── Adempimenti dichiarativi EXTRA dal foglio DICHIARAZIONI (R22-R31, R95)
   {
     const DE = T.dichExtra;
-    if (form.extraIvaTR)       add("Modello IVA TR",                DE.ivaTR,       "Importo fisso",  "Dichiarazioni");
-    if (form.extraDownloadISA) add("Download ISA",                  DE.downloadISA, "Importo fisso",  "Dichiarazioni");
+    if (form.extraIvaTR)       add("Modello IVA TR",                exOvr("ivaTR", DE.ivaTR),       exDet("ivaTR", "Importo fisso"),  "Dichiarazioni");
+    if (form.extraDownloadISA) add("Download ISA",                  exOvr("downloadISA", DE.downloadISA), exDet("downloadISA", "Importo fisso"),  "Dichiarazioni");
     if (form.extraInvioDich) {
       const n = parseInt(form.nInvioDich) || 1;
-      add(`Invio telematico dichiarazioni (×${n})`, DE.invioDich * n,
-        `${n} invii × ${eur(DE.invioDich)}`, "Dichiarazioni");
+      const u = exOvr("invioDich", DE.invioDich);
+      add(`Invio telematico dichiarazioni (×${n})`, u * n,
+        exDet("invioDich", `${n} invii × ${eur(u)}`), "Dichiarazioni");
     }
 
     // Lettere d'intento: disambiguazione tra le due varianti presenti nel tariffario.
@@ -1039,25 +1077,25 @@ function calcAll(form, T) {
       const n = parseInt(form.nLettereIntento) || 1;
       if (form.tipoLettereIntento === "allegatoA") {
         // Variante "Allegato A BCB": 25,45 base + 5,10 per fornitore
-        const base = T.allegatoA.letteraIntentoUEBase, per = T.allegatoA.letteraIntentoUEPer;
+        const base = exOvr("lettereIntentoBase", T.allegatoA.letteraIntentoUEBase), per = T.allegatoA.letteraIntentoUEPer;
         add(`Lettere d'intento (Allegato A, ×${n} fornitori)`, base + n * per,
-          `Base ${eur(base)} + ${n} × ${eur(per)}`, "Dichiarazioni");
+          exDet("lettereIntentoBase", `Base ${eur(base)} + ${n} × ${eur(per)}`), "Dichiarazioni");
       } else {
         // Variante "Dichiarazioni" (default): 60,76 base + 5,00 per lettera
-        const base = DE.letteraIntentoBase, per = DE.letteraIntentoPer;
+        const base = exOvr("lettereIntentoBase", DE.letteraIntentoBase), per = DE.letteraIntentoPer;
         add(`Lettere d'intento (×${n} lettere)`, base + n * per,
-          `Base ${eur(base)} + ${n} × ${eur(per)}`, "Dichiarazioni");
+          exDet("lettereIntentoBase", `Base ${eur(base)} + ${n} × ${eur(per)}`), "Dichiarazioni");
       }
     }
 
     // Intrastat (foglio "tariffa A BCB", R13): 51,00 base + 2,00/documento aggiuntivo
     if (form.extraIntrastat) {
       const n = parseInt(form.nIntrastatDoc) || 1;
-      const base = T.allegatoA.intrastatBase, per = T.allegatoA.intrastatPerDoc;
+      const base = exOvr("intrastatBase", T.allegatoA.intrastatBase), per = T.allegatoA.intrastatPerDoc;
       // Nota: la base include già 1 documento, gli ulteriori sono (n-1)
       const extraDoc = Math.max(0, n - 1);
       add(`Modello Intrastat (×${n} doc.)`, base + extraDoc * per,
-        `Base ${eur(base)} + ${extraDoc} doc. aggiuntivi × ${eur(per)}`, "Dichiarazioni");
+        exDet("intrastatBase", `Base ${eur(base)} + ${extraDoc} doc. aggiuntivi × ${eur(per)}`), "Dichiarazioni");
     }
   }
 
@@ -1155,9 +1193,9 @@ function calcAll(form, T) {
   // categoria visuale fine a se stessa, generando voci che scomparivano dal totale .docx).
   const A = T.allegatoA;
   // — Extra di tipo "Consulenza" (1.4)
-  if (form.extraVisure)     add("Visure camerali CCIAA",           A.visureCamerali,  "Per visura",     "Consulenza");
-  if (form.extraVarUE)      add("Variazioni dati Ufficio Entrate", A.variazioniUE,    "Per pratica",    "Consulenza");
-  if (form.extraISCRINPS)   add("Iscrizione INPS / Albi",          A.iscrizioneINPS,  "Per iscrizione", "Consulenza");
+  if (form.extraVisure)     add("Visure camerali CCIAA",           exOvr("visure", A.visureCamerali),  exDet("visure", "Per visura"),     "Consulenza");
+  if (form.extraVarUE)      add("Variazioni dati Ufficio Entrate", exOvr("varUE", A.variazioniUE),    exDet("varUE", "Per pratica"),    "Consulenza");
+  if (form.extraISCRINPS)   add("Iscrizione INPS / Albi",          exOvr("iscrINPS", A.iscrizioneINPS),  exDet("iscrINPS", "Per iscrizione"), "Consulenza");
   // Ravvedimenti: il tariffario XLS dice "da 55,00" (minimo). L'utente può
   // inserire un importo più alto in base alla complessità del caso.
   if (form.extraRavved) {
@@ -1256,7 +1294,10 @@ function formatImportoLettere(v) {
   const totCents = Math.round(v * 100);
   const intPart  = Math.floor(totCents / 100);
   const cents    = totCents % 100;
-  const formatted = intPart.toLocaleString('it-IT')+','+(cents<10?'0':'')+cents;
+  // useGrouping esplicito: senza, l'ICU italiano non separa le migliaia nei
+  // numeri a 4 cifre ("4000" invece di "4.000" — i documenti dello studio
+  // scrivono "€ 4.000,00").
+  const formatted = intPart.toLocaleString('it-IT', { useGrouping: true })+','+(cents<10?'0':'')+cents;
   return `€ ${formatted} (${numToItalian(intPart)}/${cents<10?'0':''}${cents} centesimi)`;
 }
 function todayIT() {
@@ -1645,15 +1686,17 @@ function scegliTemplatePreventivo(form) {
            righe: { cont:true, bil:false, cu770:true, domic:true } };
 }
 
-async function generaDocumenti(form, items, T) {
-  // ── Somme per riga secondo la classificazione dei template 2026 ──
-  // (gruppi assegnati in calcAll):
-  //   1.1 Contabilità      → group "Contabilità"
-  //   1.2 Dichiarazioni    → group "Dichiarazioni" + "IMU"
-  //   Bilancio CEE         → group "Bilancio" (riga propria in Srl/Consulenze)
-  //   CU + Modello 770     → group "CU / Modello 770" (+ legacy "770" custom)
-  //   Consulenza generica  → group "Consulenza" (+ gruppi sconosciuti)
-  //   Domiciliazione       → group "Domiciliazione"
+/* ────────────────────────────────────────────────────────────────
+   calcRighe — somme di RIGA del documento, condivise da generaDocumenti
+   e dal Riepilogo (Step 5).
+   1) somma i gruppi di calcAll nelle righe del template 2026;
+   2) ripiega le righe assenti nel template scelto;
+   3) applica gli eventuali "ritocchi finali di riga" (form.rigaOverrides),
+      il flusso reale dello studio: componenti calcolati → cifra di riga
+      arrotondata a mano (caso APE: 1.2 portata a 5.342 €).
+   Ritorna { tmpl, righe, calcolate, cTot, warnings }.
+   ──────────────────────────────────────────────────────────────── */
+function calcRighe(form, items) {
   const sumBy = fn => items.filter(i => !i.sub && fn(i)).reduce((s,i) => s + (i.val||0), 0);
   // "Modello 770" e "770" sono le etichette usate dalle voci personalizzate
   // dell'Editor Tariffario (campo `sezione`): vanno nella riga CU/770.
@@ -1684,8 +1727,35 @@ async function generaDocumenti(form, items, T) {
     warnings.push("Il template Consulenze non ha la riga Contabilità: l'importo è stato sommato alla riga Dichiarazioni.");
   }
 
+  const calcolate = { cont:cCont, dich:cDich, bil:cBil, cu770:cCU770, cons:cCons, domic:cDomic };
+
+  // Ritocchi finali di riga (importo concordato per riga del documento)
+  const ovr = form.rigaOverrides || {};
+  const eff = {};
+  for (const k of Object.keys(calcolate)) {
+    const v = parseNum(ovr[k]);
+    eff[k] = v > 0 ? v : calcolate[k];
+  }
+  const cTot = eff.cont + eff.dich + eff.bil + eff.cu770 + eff.cons + eff.domic;
+
+  return { tmpl, righe: eff, calcolate, cTot, warnings };
+}
+
+// Formati per i DOCUMENTI (allineati ai file definitivi dello studio):
+// nel preventivo gli importi hanno il simbolo € DAVANTI ("€ 4.000,00"),
+// nel mandato il template scrive già "euro" quindi serve il numero nudo.
+const numDoc = n =>
+  (typeof n === "number" && !isNaN(n))
+    ? n.toLocaleString("it-IT", { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: true })
+    : "—";
+const eurDoc = n => (typeof n === "number" && !isNaN(n)) ? `€ ${numDoc(n)}` : "—";
+
+async function generaDocumenti(form, items, T) {
+  const { tmpl, righe, cTot, warnings } = calcRighe(form, items);
+  const cCont = righe.cont, cDich = righe.dich, cBil = righe.bil,
+        cCU770 = righe.cu770, cCons = righe.cons, cDomic = righe.domic;
+
   const cTantum = form.hasTariffaApertura ? (parseFloat(form.tariffaApertura) || 0) : 0;
-  const cTot   = cCont + cDich + cBil + cCU770 + cCons + cDomic;
 
   // Sconto Concordato (€ assoluti) — entra solo nel Preventivo, non nel
   // contratto/informativa. Clamp a 0 se negativo o superiore al totale.
@@ -1723,30 +1793,44 @@ async function generaDocumenti(form, items, T) {
     form.pagamentoModo === 'bonifico' ||
     (form.pagamentoModo === 'rid' && (fatt === 'Mensile' || fatt === 'Trimestrale'));
   const pagamentoText =
-    form.pagamentoModo === 'bonifico' ? 'pagamento mediante bonifico bancario'
+    form.pagamentoModo === 'bonifico' ? 'pagamento bonifico bancario'
     : form.pagamentoModo === 'rid'
       ? (fatt === 'Mensile'     ? 'pagamento 12 rid mensili'
         : fatt === 'Trimestrale' ? 'pagamento 4 rid trimestrali'
         : 'pagamento 12/4 rid mensili/trimestrali')
       : 'pagamento 12/4 rid mensili/trimestrali – bonifico bancario';
 
+  // Frasi dei totali di sezione nei dettagli ("Per le prestazioni sopra
+  // elencate il preventivo di massima ammonta ad ..."): importo della RIGA
+  // in cifre e lettere, come nel caso APE definitivo della consulente
+  // ("€ 4.000,00 (quattromila/00 centesimi)").
+  const lettere = v => (v > 0 ? formatImportoLettere(v) : '€ 0,00 (zero/00 centesimi)');
+
   const prevTokens = {
     '{{RICHIEDENTE}}':     cliente,
     '{{N_RILE}}':          nRileStr || '_____',
     '{{N_DOCS}}':          nDocsStr || '_____',
-    '{{C_TANTUM}}':        tantumPresente ? eur(cTantum)       : '—',
-    '{{C_TANTUM_TOT}}':    tantumPresente ? eur(cTantum)       : '—',
-    '{{C_TANTUM_SCONTO}}': scontoTantum>0 ? eur(scontoTantum)  : '—',
-    '{{C_TANTUM_NETTO}}':  tantumPresente ? eur(cTantumNetto)  : '—',
-    '{{C_CONT}}':   eur(cCont),
-    '{{C_DICH}}':   cDich>0  ? eur(cDich)  : '—',
-    '{{C_BIL}}':    cBil>0   ? eur(cBil)   : '—',
-    '{{C_CU770}}':  cCU770>0 ? eur(cCU770) : '—',
-    '{{C_CONS}}':   cCons>0  ? eur(cCons)  : '—',
-    '{{C_DOMIC}}':  cDomic>0 ? eur(cDomic) : '—',
-    '{{C_TOT_ANNUO}}':    eur(cTot),
-    '{{C_ANNUO_SCONTO}}': scontoAnnuo>0 ? eur(scontoAnnuo) : '—',
-    '{{C_ANNUO_NETTO}}':  eur(cTotNetto),
+    '{{C_TANTUM}}':        tantumPresente ? eurDoc(cTantum)       : '—',
+    '{{C_TANTUM_TOT}}':    tantumPresente ? eurDoc(cTantum)       : '—',
+    '{{C_TANTUM_SCONTO}}': scontoTantum>0 ? eurDoc(scontoTantum)  : '—',
+    '{{C_TANTUM_NETTO}}':  tantumPresente ? eurDoc(cTantumNetto)  : '—',
+    '{{C_CONT}}':   eurDoc(cCont),
+    '{{C_DICH}}':   cDich>0  ? eurDoc(cDich)  : '—',
+    '{{C_BIL}}':    cBil>0   ? eurDoc(cBil)   : '—',
+    '{{C_CU770}}':  cCU770>0 ? eurDoc(cCU770) : '—',
+    '{{C_CONS}}':   cCons>0  ? eurDoc(cCons)  : '—',
+    '{{C_DOMIC}}':  cDomic>0 ? eurDoc(cDomic) : '—',
+    '{{C_TOT_ANNUO}}':    eurDoc(cTot),
+    '{{C_ANNUO_SCONTO}}': scontoAnnuo>0 ? eurDoc(scontoAnnuo) : '—',
+    '{{C_ANNUO_NETTO}}':  eurDoc(cTotNetto),
+    // Frasi dei totali nelle sezioni di dettaglio
+    '{{S_TANTUM}}': tantumPresente ? lettere(cTantum) : '—',
+    '{{S_CONT}}':   lettere(cCont),
+    '{{S_DICH}}':   lettere(cDich),
+    '{{S_BIL}}':    lettere(cBil),
+    '{{S_CU770}}':  lettere(cCU770),
+    '{{S_CONS}}':   lettere(cCons),
+    '{{S_DOMIC}}':  lettere(cDomic),
     // "Onorario già compreso nel precedente punto {{P_REF}}" → riga
     // Contabilità del template (nel Forfettari scala con la tariffa apertura)
     '{{P_REF}}':  tmpl.key === 'forf' ? (tantumPresente ? '1.2' : '1.1') : '1.1',
@@ -1840,19 +1924,21 @@ async function generaDocumenti(form, items, T) {
   const contTokens = {
     '{{CLIENTE_BLOCK_PF}}':  isPF  ? blockPF  : `[SEZIONE PERSONA FISICA NON APPLICABILE] `,
     '{{CLIENTE_BLOCK_SOC}}': !isPF ? blockSoc : `[SEZIONE SOCIET\u00c0 NON APPLICABILE] `,
-    '{{C_TANTUM}}':    tantumPresente ? eur(cTantumNetto) : '\u2014',
-    '{{C_CONT}}':      eur(cCont),
-    '{{C_DICH}}':      cDich>0  ? eur(cDich)  : '\u2014',
+    // Anche nel modello legacy il template scrive "euro {{TOKEN}}": numeri
+    // nudi, e il "Totale dei compensi" \u00e8 il NETTO (come nei mandati 2026).
+    '{{C_TANTUM}}':    tantumPresente ? numDoc(cTantumNetto) : '\u2014',
+    '{{C_CONT}}':      numDoc(cCont),
+    '{{C_DICH}}':      cDich>0  ? numDoc(cDich)  : '\u2014',
     // Nel modello legacy il punto "770" riceve la somma CU+770 (nuova
     // classificazione 2026) e la consulenza assorbe la domiciliazione,
     // cos\u00ec la somma dei punti coincide con il totale annuo.
-    '{{C_770}}':       cCU770>0 ? eur(cCU770) : '\u2014',
-    '{{C_CONS}}':      (cCons+cDomic)>0 ? eur(cCons+cDomic) : '\u2014',
+    '{{C_770}}':       cCU770>0 ? numDoc(cCU770) : '\u2014',
+    '{{C_CONS}}':      (cCons+cDomic)>0 ? numDoc(cCons+cDomic) : '\u2014',
     '{{C_EXTRA}}':     '\u2014',
-    '{{C_TOT_ANNUO}}': eur(cTot),
-    '{{SCONTO_PCT}}':  scontoAnnuo>0 ? eur(scontoAnnuo) : '\u2014',
+    '{{C_TOT_ANNUO}}': numDoc(cTotNetto),
+    '{{SCONTO_PCT}}':  scontoAnnuo>0 ? `euro ${numDoc(scontoAnnuo)}` : '\u2014',
     '{{ANNO}}':        anno,
-    '{{C_RIDOTTO}}':   eur(cTotNetto),
+    '{{C_RIDOTTO}}':   `euro ${numDoc(cTotNetto)}`,
     '{{NOME_CLIENTE_FIRMA}}': cliente,
     // Numeri di sezione dinamici (vedi commenti sopra)
     '{{N_APE}}':   N_APE,         // notation completa "1.1"
@@ -1878,25 +1964,29 @@ async function generaDocumenti(form, items, T) {
   const blockPFFull  = blockPF  + 'Cliente”,';
   const blockSocFull = blockSoc + 'Cliente”,';
 
+  // NOTA FORMATI (dal mandato definitivo "APE SRL" della consulente):
+  // il template scrive già la parola "euro", quindi i token portano il
+  // NUMERO NUDO ("4.000,00"); il "Totale dei compensi annui" è il NETTO
+  // ("pari a euro 14.000,00 al netto dello sconto di euro 1.927,00").
   const mandTokens = {
     '{{CLIENTE_BLOCK_PF}}':  blockPFFull,
     '{{CLIENTE_BLOCK_SOC}}': blockSocFull,
-    '{{M_TANTUM}}': tantumPresente ? eur(cTantumNetto) : '—',
+    '{{M_TANTUM}}': tantumPresente ? numDoc(cTantumNetto) : '—',
     // Compensi per punto: rispecchiano le righe del preventivo allegato.
     //   Semplificate: 1.1 contabilità, 1.2 dichiarazioni, 1.3 CU/770,
     //                 1.4 consulenza, 1.5 domiciliazione
     //   Forfettari:   1.1 contabilità, 1.2 dichiarazioni (con CU/770),
     //                 1.3 consulenza (con domiciliazione) — 1.4/1.5 non usati
-    '{{M_P11}}': eur(cCont),
-    '{{M_P12}}': cDich>0 ? eur(cDich) : '—',
-    '{{M_P13}}': tmpl.key === 'forf' ? (cCons>0  ? eur(cCons)  : '—')
-                                     : (cCU770>0 ? eur(cCU770) : '—'),
-    '{{M_P14}}': tmpl.key === 'forf' ? '—' : (cCons>0  ? eur(cCons)  : '—'),
-    '{{M_P15}}': tmpl.key === 'forf' ? '—' : (cDomic>0 ? eur(cDomic) : '—'),
-    '{{M_TOT}}':    eur(cTot),
-    '{{M_SCONTO}}': scontoAnnuo>0 ? eur(scontoAnnuo) : '—',
+    '{{M_P11}}': numDoc(cCont),
+    '{{M_P12}}': cDich>0 ? numDoc(cDich) : '—',
+    '{{M_P13}}': tmpl.key === 'forf' ? (cCons>0  ? numDoc(cCons)  : '—')
+                                     : (cCU770>0 ? numDoc(cCU770) : '—'),
+    '{{M_P14}}': tmpl.key === 'forf' ? '—' : (cCons>0  ? numDoc(cCons)  : '—'),
+    '{{M_P15}}': tmpl.key === 'forf' ? '—' : (cDomic>0 ? numDoc(cDomic) : '—'),
+    '{{M_TOT}}':    numDoc(cTotNetto),
+    '{{M_SCONTO}}': scontoAnnuo>0 ? `euro ${numDoc(scontoAnnuo)}` : '—',
     '{{M_ANNO}}':   anno,
-    '{{M_RIDOTTO}}': eur(cTotNetto),
+    '{{M_RIDOTTO}}': `euro ${numDoc(cTotNetto)}`,
     '{{M_PERIODICITA}}': fatt === 'Mensile' ? 'mensilmente'
                        : fatt === 'Trimestrale' ? 'trimestralmente'
                        : 'mensilmente / trimestralmente',
@@ -1997,6 +2087,10 @@ const INIT = {
   hasTariffaApertura:false,   // 1.1 una tantum apertura — flag di attivazione
   tariffaApertura:"",         // 1.1 una tantum apertura (importo)
   hasContabilita:true, regimeContabile:"", nDocumenti:"", nRilevazioni:"",
+  // Contabilità: come per le altre voci, l'importo può essere concordato a
+  // mano (caso APE: 4.000 € invece dei 3.198,29 € di tariffario) — richiesta
+  // n.1 della consulente. "" | "standard" | "base".
+  contModo:"", contTariffaBase:"",
   // <prefix>Modo è una scelta TRI-STATE: "" (nessuna scelta), "standard" (calcolo
   // del tariffario), "base" (importo concordato libero in <prefix>TariffaBase).
   // Default "" → la radio appare senza preselezione; la calcAll comunque
@@ -2005,6 +2099,10 @@ const INIT = {
   cuModo:"", cuTariffaBase:"",
   hasLipe:false,  nInviiLipe:4,
   lipeModo:"", lipeTariffaBase:"",
+  // LIPE IVA di Gruppo — voce separata dalle LIPE ordinarie (richiesta n.2
+  // della consulente: caso APE, 4 invii aggiuntivi per l'IVA di gruppo).
+  hasLipeGruppo:false, nInviiLipeGruppo:4,
+  lipeGruppoModo:"", lipeGruppoTariffaBase:"",
   hasDichIVA:false,
   dichIvaModo:"", dichIvaTariffaBase:"",
   hasUPF:false,   upfQuadri:{base:true}, upfRighe:{},
@@ -2026,6 +2124,10 @@ const INIT = {
   hasImuDich:false, nImuComuni:"1",
   imuDichModo:"", imuDichTariffaBase:"",
   hasBilancio:false, bilancioRicavi:"", bilancioAttivo:"", bilancioImmobiliare:false, bilancioRiduzione:20,
+  // Bilancio: importo concordato a mano in alternativa al calcolo su
+  // ricavi+attivo (richiesta n.4 della consulente — caso APE: 3.000 €
+  // invece dei 10.242,68 € calcolati). "" | "standard" | "base".
+  bilancioModo:"", bilancioTariffaBase:"",
   // Bilancio: in alternativa (o in aggiunta) al calcolo su ricavi+attivo,
   // si può applicare la tariffa fissa minima dell'anno scelto (art. 34, dalla
   // tabella storicoMinimi del tariffario). I due valori sono SOMMABILI:
@@ -2058,6 +2160,16 @@ const INIT = {
   // Voci libere (nome + importo, tutto manuale). Array di oggetti
   // { id, nome, importo, gruppo } — gruppo: "Contabilità" | "Dichiarazioni" | "IMU" | "Consulenza"
   vociLibere:[],
+  // Importi personalizzati delle voci extra (richiesta n.5 della consulente:
+  // caso APE, Download ISA a 12 € invece di 11,29 €). Mappa chiave → importo:
+  // se valorizzato sostituisce la tariffa standard (per le voci a quantità
+  // sostituisce l'importo UNITARIO).
+  extraOverrides:{},
+  // Ritocco finale degli importi di RIGA del documento (flusso reale dello
+  // studio: componenti calcolati, poi cifra di riga arrotondata a mano —
+  // caso APE: riga 1.2 portata a 5.342 €). Chiavi: cont, dich, bil, cu770,
+  // cons, domic. Vuoto = usa la somma calcolata.
+  rigaOverrides:{},
   hasConsulenza:false, consulenzaRicavi:"",
   // Consulenza: come per le dichiarazioni, scelta tra tariffario (fascia
   // ricavi) e importo annuo concordato a mano (richiesta del consulente).
@@ -2270,6 +2382,28 @@ const Radio = ({ value, onChange, options }) => (
     ))}
   </div>
 );
+/* Checkbox di voce extra con importo personalizzabile (richiesta della
+   consulente, caso APE: Download ISA a 12 € invece di 11,29 €): quando la
+   voce è attiva appare un campo € opzionale che sostituisce la tariffa
+   standard (per le voci a quantità, l'importo UNITARIO). */
+const ExtraChk = ({ label, checked, onChange, form, upd, k, std, unit }) => (
+  <div>
+    <Chk label={label} checked={checked} onChange={onChange}/>
+    {checked && (
+      <div style={{ marginLeft:24, marginBottom:6, display:"flex", alignItems:"center", gap:6 }}>
+        <span style={{ fontSize:11, color:C.muted }}>
+          € personalizzato{unit ? ` (${unit})` : ""}:
+        </span>
+        <input type="number" min="0" step="0.01"
+          value={(form.extraOverrides||{})[k] ?? ""}
+          onChange={e=>upd("extraOverrides", { ...(form.extraOverrides||{}), [k]: e.target.value })}
+          placeholder={std}
+          style={{ ...sty.inp, width:110, padding:"4px 8px", fontSize:12 }}/>
+      </div>
+    )}
+  </div>
+);
+
 const Chk = ({ label, checked, onChange }) => (
   <label style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer", marginBottom:6, fontSize:14 }}>
     <input type="checkbox" checked={checked} onChange={onChange} style={{ width:15, height:15 }}/>
@@ -3029,7 +3163,44 @@ function Step2({ form, upd, T }) {
             </table>
           </>
         )}
-        {preview !== null && (
+        {/* ── Modalità tariffa contabilità: calcolo del tariffario oppure
+             importo concordato a mano (richiesta della consulente — caso APE:
+             4.000 € concordati invece dei 3.198,29 € di tariffario).
+             Il numero di documenti/rilevazioni resta comunque necessario:
+             compila la riga "Fino a …" del documento. */}
+        {form.regimeContabile && (
+          <div style={{ marginTop:14, paddingTop:12, borderTop:`1px solid ${C.border}` }}>
+            <label style={sty.lbl}>Tariffa contabilità</label>
+            <Radio value={form.contModo||""} onChange={v=>upd("contModo",v)} options={[
+              {val:"standard", label:"Tariffario standard (calcolata come sopra)"},
+              {val:"base",     label:"Importo annuo concordato a mano"},
+            ]}/>
+            {(form.contModo||"") === "" && (
+              <div style={{ marginTop:8, padding:"8px 12px", background:C.warnBg,
+                border:`1px solid ${C.warnBorder}`, borderRadius:6, fontSize:12, color:C.warn }}>
+                ⚠ Seleziona una delle due opzioni: senza scelta si applica il tariffario standard.
+              </div>
+            )}
+            {form.contModo === "base" && (
+              <div style={{ marginTop:10, maxWidth:280 }}>
+                <Inp label="Importo annuo concordato (€)" value={form.contTariffaBase}
+                  onChange={v=>upd("contTariffaBase",v)} type="number" min="0" placeholder="Es. 4000"/>
+                <p style={{ margin:"6px 0 0", fontSize:11.5, color:C.muted, fontStyle:"italic" }}>
+                  Il numero di documenti/rilevazioni inserito sopra resta necessario per la
+                  riga "Fino a …" del documento.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {form.contModo === "base" ? (
+          <div style={{ marginTop:12, padding:"10px 14px", background:C.light, borderRadius:7,
+            borderLeft:`3px solid ${C.accent}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <span style={{ fontSize:14 }}>Tariffa annua concordata</span>
+            <span style={{ fontWeight:700, fontSize:16, color:C.accent }}>{eur(parseNum(form.contTariffaBase))}</span>
+          </div>
+        ) : preview !== null && (
           <div style={{ marginTop:12, padding:"10px 14px", background:C.light, borderRadius:7,
             borderLeft:`3px solid ${C.accent}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
             <span style={{ fontSize:14 }}>Tariffa annua calcolata</span>
@@ -3133,6 +3304,27 @@ function Step3({ form, upd, T }) {
             </p>
           </div>
           </TariffaBaseSelector>
+
+          {/* LIPE IVA di Gruppo — voce separata dalle LIPE ordinarie
+              (liquidazione IVA di gruppo, art. 73 c.3 DPR 633/72). Ha un
+              proprio conteggio invii e compare come riga distinta nel
+              riepilogo e nella sezione 1.2 del documento. */}
+          <div style={{ marginTop:14, paddingTop:12, borderTop:`1px solid ${C.border}` }}>
+            <Chk label={`LIPE IVA di Gruppo — comunicazioni aggiuntive per l'IVA di gruppo (${eur(T.lipe)} per invio)`}
+              checked={form.hasLipeGruppo} onChange={()=>upd("hasLipeGruppo",!form.hasLipeGruppo)}/>
+            {form.hasLipeGruppo && (
+              <div style={{ marginLeft:24, marginTop:8 }}>
+                <TariffaBaseSelector form={form} upd={upd} prefix="lipeGruppo">
+                  <Inp label="Numero invii IVA di gruppo (1–4)" value={form.nInviiLipeGruppo}
+                    onChange={v=>upd("nInviiLipeGruppo",Math.min(4,Math.max(1,parseInt(v)||1)))}
+                    type="number" min="1" max="4"/>
+                  <div style={{ marginTop:8, fontSize:13, color:C.accent }}>
+                    Totale IVA di gruppo: <strong>{eur(T.lipe*Math.min(4,Math.max(1,parseInt(form.nInviiLipeGruppo)||1)))}</strong>
+                  </div>
+                </TariffaBaseSelector>
+              </div>
+            )}
+          </div>
         </Card>
       ) : (
         <NotApplicableCard title="LIPE – Comunicazioni Periodiche IVA" reason={elig.reason.lipe}/>
@@ -3359,8 +3551,31 @@ function Step4({ form, upd, T }) {
       <h2 style={{ color:C.primary, marginTop:0 }}>Bilancio, Consulenza & Servizi Extra</h2>
 
       {elig.bilancio && (
-        <Card title="Bilancio SRL" subtitle={`Calcolato su ricavi e attivo – minimo ${eur(T.bilancio.minimo)}`}
+        <Card title="Bilancio SRL" subtitle={`Calcolato su ricavi e attivo – minimo ${eur(T.bilancio.minimo)} — oppure importo concordato`}
           enabled={form.hasBilancio} onToggle={()=>upd("hasBilancio",!form.hasBilancio)}>
+          {/* ── Modalità tariffa: calcolo del tariffario oppure importo
+               concordato a mano (richiesta della consulente — caso APE:
+               3.000 € concordati invece dei 10.242,68 € calcolati). */}
+          <div style={{ marginBottom:14, paddingBottom:12, borderBottom:`1px solid ${C.border}` }}>
+            <Radio value={form.bilancioModo||""} onChange={v=>upd("bilancioModo",v)} options={[
+              {val:"standard", label:"Tariffario standard (calcolo su ricavi e attivo)"},
+              {val:"base",     label:"Importo annuo concordato a mano"},
+            ]}/>
+            {(form.bilancioModo||"") === "" && (
+              <div style={{ marginTop:8, padding:"8px 12px", background:C.warnBg,
+                border:`1px solid ${C.warnBorder}`, borderRadius:6, fontSize:12, color:C.warn }}>
+                ⚠ Seleziona una delle due opzioni sopra per definire questa voce.
+              </div>
+            )}
+            {form.bilancioModo === "base" && (
+              <div style={{ marginTop:10, maxWidth:280 }}>
+                <Inp label="Importo annuo concordato (€)" value={form.bilancioTariffaBase}
+                  onChange={v=>upd("bilancioTariffaBase",v)} type="number" min="0" placeholder="Es. 3000"/>
+              </div>
+            )}
+          </div>
+
+          {form.bilancioModo !== "base" && (<>
           {/* ── Tariffa fissa per anno (sommabile al calcolo su ricavi+attivo).
                Tabella storica art. 34 DM 140/2012 (foglio BILANCIO XLS, R36-R40).
                Posizionata in cima al box per essere immediatamente visibile —
@@ -3483,6 +3698,7 @@ function Step4({ form, upd, T }) {
               </div>
             </div>
           )}
+          </>)}
         </Card>
       )}
 
@@ -3608,17 +3824,26 @@ function Step4({ form, upd, T }) {
       </Card>
 
       <Card title="Servizi Extra – Allegato A" alwaysOpen>
+        <p style={{ margin:"0 0 8px", fontSize:11.5, color:C.muted, fontStyle:"italic" }}>
+          Attivando una voce puoi anche personalizzarne l'importo (il campo "€ personalizzato"
+          sostituisce la tariffa standard).
+        </p>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:4, marginBottom:4 }}>
-          <Chk label={`Variazioni dati CCIAA – ${eur(T.allegatoA.variazioniCCIAA)}`}
-            checked={form.extraVarCCIAA} onChange={()=>upd("extraVarCCIAA",!form.extraVarCCIAA)}/>
-          <Chk label={`Visure camerali – ${eur(T.allegatoA.visureCamerali)}`}
-            checked={form.extraVisure} onChange={()=>upd("extraVisure",!form.extraVisure)}/>
-          <Chk label={`Invio Bilancio al RI – ${eur(T.allegatoA.invioBilancioRI)}`}
-            checked={form.extraBilancioRI} onChange={()=>upd("extraBilancioRI",!form.extraBilancioRI)}/>
-          <Chk label={`Variazioni dati Uff. Entrate – ${eur(T.allegatoA.variazioniUE)}`}
-            checked={form.extraVarUE} onChange={()=>upd("extraVarUE",!form.extraVarUE)}/>
-          <Chk label={`Iscrizione INPS / Albi – ${eur(T.allegatoA.iscrizioneINPS)}`}
-            checked={form.extraISCRINPS} onChange={()=>upd("extraISCRINPS",!form.extraISCRINPS)}/>
+          <ExtraChk label={`Variazioni dati CCIAA – ${eur(T.allegatoA.variazioniCCIAA)}`}
+            checked={form.extraVarCCIAA} onChange={()=>upd("extraVarCCIAA",!form.extraVarCCIAA)}
+            form={form} upd={upd} k="varCCIAA" std={String(T.allegatoA.variazioniCCIAA)}/>
+          <ExtraChk label={`Visure camerali – ${eur(T.allegatoA.visureCamerali)}`}
+            checked={form.extraVisure} onChange={()=>upd("extraVisure",!form.extraVisure)}
+            form={form} upd={upd} k="visure" std={String(T.allegatoA.visureCamerali)}/>
+          <ExtraChk label={`Invio Bilancio al RI – ${eur(T.allegatoA.invioBilancioRI)}`}
+            checked={form.extraBilancioRI} onChange={()=>upd("extraBilancioRI",!form.extraBilancioRI)}
+            form={form} upd={upd} k="bilancioRI" std={String(T.allegatoA.invioBilancioRI)}/>
+          <ExtraChk label={`Variazioni dati Uff. Entrate – ${eur(T.allegatoA.variazioniUE)}`}
+            checked={form.extraVarUE} onChange={()=>upd("extraVarUE",!form.extraVarUE)}
+            form={form} upd={upd} k="varUE" std={String(T.allegatoA.variazioniUE)}/>
+          <ExtraChk label={`Iscrizione INPS / Albi – ${eur(T.allegatoA.iscrizioneINPS)}`}
+            checked={form.extraISCRINPS} onChange={()=>upd("extraISCRINPS",!form.extraISCRINPS)}
+            form={form} upd={upd} k="iscrINPS" std={String(T.allegatoA.iscrizioneINPS)}/>
           <Chk label={`Ravvedimenti – da ${eur(T.allegatoA.ravvedimenti)}`}
             checked={form.extraRavved} onChange={()=>upd("extraRavved",!form.extraRavved)}/>
         </div>
@@ -3632,8 +3857,9 @@ function Step4({ form, upd, T }) {
             </p>
           </div>
         )}
-        <Chk label={`Vidimazione libri sociali – ${eur(T.allegatoA.vidimLibri)}/libro`}
-          checked={form.extraLibri} onChange={()=>upd("extraLibri",!form.extraLibri)}/>
+        <ExtraChk label={`Vidimazione libri sociali – ${eur(T.allegatoA.vidimLibri)}/libro`}
+          checked={form.extraLibri} onChange={()=>upd("extraLibri",!form.extraLibri)}
+          form={form} upd={upd} k="vidimLibri" std={String(T.allegatoA.vidimLibri)} unit="per libro"/>
         {form.extraLibri && (
           <div style={{ marginLeft:24, maxWidth:160 }}>
             <Inp label="N. libri" value={form.nLibri} onChange={v=>upd("nLibri",v)} type="number" min="1"/>
@@ -3646,22 +3872,30 @@ function Step4({ form, upd, T }) {
           Adempimenti aggiuntivi dal tariffario contabile (foglio CONTABILITA, voci Extra Preveo).
         </p>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:4, marginBottom:4 }}>
-          <Chk label={`Fatturazione elettronica – ${eur(T.contExtra.fattElettr)}/ft`}
-            checked={form.extraFattElettr} onChange={()=>upd("extraFattElettr",!form.extraFattElettr)}/>
-          <Chk label={`Invio XML mensile TD17/18/20 – ${eur(T.contExtra.xmlMensile)}/file`}
-            checked={form.extraXMLMensile} onChange={()=>upd("extraXMLMensile",!form.extraXMLMensile)}/>
-          <Chk label={`Maggiorazione recupero corrispettivi – ${eur(T.contExtra.maggiorCorr)}`}
-            checked={form.extraMaggiorCorr} onChange={()=>upd("extraMaggiorCorr",!form.extraMaggiorCorr)}/>
-          <Chk label={`Situazione contabile periodica – ${eur(T.contExtra.situazContabile)}`}
-            checked={form.extraSituazContabile} onChange={()=>upd("extraSituazContabile",!form.extraSituazContabile)}/>
-          <Chk label={`Situazione patrimoniale periodica – ${eur(T.contExtra.situazPatrimoniale)}`}
-            checked={form.extraSituazPatrimoniale} onChange={()=>upd("extraSituazPatrimoniale",!form.extraSituazPatrimoniale)}/>
-          <Chk label={`Liquidazioni IVA mensili – ${eur(T.contExtra.liquidIVAMensili)}`}
-            checked={form.extraLiquidIVAMensili} onChange={()=>upd("extraLiquidIVAMensili",!form.extraLiquidIVAMensili)}/>
-          <Chk label={`Liquidazioni IVA trimestrali – ${eur(T.contExtra.liquidIVATrim)}`}
-            checked={form.extraLiquidIVATrim} onChange={()=>upd("extraLiquidIVATrim",!form.extraLiquidIVATrim)}/>
-          <Chk label={`Importazione XML SDI – ${eur(T.contExtra.importXML)}`}
-            checked={form.extraImportXML} onChange={()=>upd("extraImportXML",!form.extraImportXML)}/>
+          <ExtraChk label={`Fatturazione elettronica – ${eur(T.contExtra.fattElettr)}/ft`}
+            checked={form.extraFattElettr} onChange={()=>upd("extraFattElettr",!form.extraFattElettr)}
+            form={form} upd={upd} k="fattElettr" std={String(T.contExtra.fattElettr)} unit="per fattura"/>
+          <ExtraChk label={`Invio XML mensile TD17/18/20 – ${eur(T.contExtra.xmlMensile)}/file`}
+            checked={form.extraXMLMensile} onChange={()=>upd("extraXMLMensile",!form.extraXMLMensile)}
+            form={form} upd={upd} k="xmlMensile" std={String(T.contExtra.xmlMensile)} unit="per file"/>
+          <ExtraChk label={`Maggiorazione recupero corrispettivi – ${eur(T.contExtra.maggiorCorr)}`}
+            checked={form.extraMaggiorCorr} onChange={()=>upd("extraMaggiorCorr",!form.extraMaggiorCorr)}
+            form={form} upd={upd} k="maggiorCorr" std={String(T.contExtra.maggiorCorr)}/>
+          <ExtraChk label={`Situazione contabile periodica – ${eur(T.contExtra.situazContabile)}`}
+            checked={form.extraSituazContabile} onChange={()=>upd("extraSituazContabile",!form.extraSituazContabile)}
+            form={form} upd={upd} k="situazContabile" std={String(T.contExtra.situazContabile)}/>
+          <ExtraChk label={`Situazione patrimoniale periodica – ${eur(T.contExtra.situazPatrimoniale)}`}
+            checked={form.extraSituazPatrimoniale} onChange={()=>upd("extraSituazPatrimoniale",!form.extraSituazPatrimoniale)}
+            form={form} upd={upd} k="situazPatrimoniale" std={String(T.contExtra.situazPatrimoniale)}/>
+          <ExtraChk label={`Liquidazioni IVA mensili – ${eur(T.contExtra.liquidIVAMensili)}`}
+            checked={form.extraLiquidIVAMensili} onChange={()=>upd("extraLiquidIVAMensili",!form.extraLiquidIVAMensili)}
+            form={form} upd={upd} k="liquidIVAMensili" std={String(T.contExtra.liquidIVAMensili)}/>
+          <ExtraChk label={`Liquidazioni IVA trimestrali – ${eur(T.contExtra.liquidIVATrim)}`}
+            checked={form.extraLiquidIVATrim} onChange={()=>upd("extraLiquidIVATrim",!form.extraLiquidIVATrim)}
+            form={form} upd={upd} k="liquidIVATrim" std={String(T.contExtra.liquidIVATrim)}/>
+          <ExtraChk label={`Importazione XML SDI – ${eur(T.contExtra.importXML)}`}
+            checked={form.extraImportXML} onChange={()=>upd("extraImportXML",!form.extraImportXML)}
+            form={form} upd={upd} k="importXML" std={String(T.contExtra.importXML)}/>
         </div>
         {form.extraFattElettr && (
           <div style={{ marginLeft:24, maxWidth:200, marginTop:6 }}>
@@ -3682,16 +3916,20 @@ function Step4({ form, upd, T }) {
           Adempimenti aggiuntivi dal foglio DICHIARAZIONI e Allegato A BCB.
         </p>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:4, marginBottom:4 }}>
-          <Chk label={`Modello IVA TR – ${eur(T.dichExtra.ivaTR)}`}
-            checked={form.extraIvaTR} onChange={()=>upd("extraIvaTR",!form.extraIvaTR)}/>
-          <Chk label={`Download ISA – ${eur(T.dichExtra.downloadISA)}`}
-            checked={form.extraDownloadISA} onChange={()=>upd("extraDownloadISA",!form.extraDownloadISA)}/>
-          <Chk label={`Invio telematico dichiarazioni – ${eur(T.dichExtra.invioDich)}/invio`}
-            checked={form.extraInvioDich} onChange={()=>upd("extraInvioDich",!form.extraInvioDich)}/>
+          <ExtraChk label={`Modello IVA TR – ${eur(T.dichExtra.ivaTR)}`}
+            checked={form.extraIvaTR} onChange={()=>upd("extraIvaTR",!form.extraIvaTR)}
+            form={form} upd={upd} k="ivaTR" std={String(T.dichExtra.ivaTR)}/>
+          <ExtraChk label={`Download ISA – ${eur(T.dichExtra.downloadISA)}`}
+            checked={form.extraDownloadISA} onChange={()=>upd("extraDownloadISA",!form.extraDownloadISA)}
+            form={form} upd={upd} k="downloadISA" std={String(T.dichExtra.downloadISA)}/>
+          <ExtraChk label={`Invio telematico dichiarazioni – ${eur(T.dichExtra.invioDich)}/invio`}
+            checked={form.extraInvioDich} onChange={()=>upd("extraInvioDich",!form.extraInvioDich)}
+            form={form} upd={upd} k="invioDich" std={String(T.dichExtra.invioDich)} unit="per invio"/>
           <Chk label={`Lettere d'intento`}
             checked={form.extraLettereIntento} onChange={()=>upd("extraLettereIntento",!form.extraLettereIntento)}/>
-          <Chk label={`Modello Intrastat – base ${eur(T.allegatoA.intrastatBase)}`}
-            checked={form.extraIntrastat} onChange={()=>upd("extraIntrastat",!form.extraIntrastat)}/>
+          <ExtraChk label={`Modello Intrastat – base ${eur(T.allegatoA.intrastatBase)}`}
+            checked={form.extraIntrastat} onChange={()=>upd("extraIntrastat",!form.extraIntrastat)}
+            form={form} upd={upd} k="intrastatBase" std={String(T.allegatoA.intrastatBase)} unit="importo base"/>
         </div>
         {form.extraInvioDich && (
           <div style={{ marginLeft:24, maxWidth:200, marginTop:6 }}>
@@ -3713,10 +3951,19 @@ function Step4({ form, upd, T }) {
                 { val:"allegatoA",
                   label:`Comunicazione Uff. Entrate (Allegato A): ${eur(T.allegatoA.letteraIntentoUEBase)} base + ${eur(T.allegatoA.letteraIntentoUEPer)}/fornitore` },
               ]}/>
-            <div style={{ marginTop:8, maxWidth:200 }}>
-              <Inp label={form.tipoLettereIntento === "allegatoA" ? "N. fornitori" : "N. lettere"}
-                value={form.nLettereIntento}
-                onChange={v=>upd("nLettereIntento",v)} type="number" min="1"/>
+            <div style={{ marginTop:8, display:"flex", gap:12, flexWrap:"wrap" }}>
+              <div style={{ maxWidth:200 }}>
+                <Inp label={form.tipoLettereIntento === "allegatoA" ? "N. fornitori" : "N. lettere"}
+                  value={form.nLettereIntento}
+                  onChange={v=>upd("nLettereIntento",v)} type="number" min="1"/>
+              </div>
+              <div style={{ maxWidth:220 }}>
+                <Inp label="Importo base personalizzato (€)"
+                  value={(form.extraOverrides||{}).lettereIntentoBase ?? ""}
+                  onChange={v=>upd("extraOverrides", { ...(form.extraOverrides||{}), lettereIntentoBase: v })}
+                  type="number" min="0"
+                  placeholder="vuoto = tariffa standard"/>
+              </div>
             </div>
           </div>
         )}
@@ -3803,7 +4050,16 @@ function Step4({ form, upd, T }) {
 /* ================================================================
    STEP 5 – RIEPILOGO
    ================================================================ */
-function Step5({ items, total, form, upd, T, onReset, onSalva, salvato, onGeneraDocs, genLoading, docLinks, genWarning }) {
+function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvato, onGeneraDocs, genLoading, docLinks, genWarning }) {
+  // Righe del documento: definizione (chiave, etichetta, presenza nel template)
+  const RIGHE_DEF = [
+    { k:"cont",  label:"Contabilità (1.1)",        presente: righeInfo.tmpl.righe.cont },
+    { k:"dich",  label:"Dichiarazioni fiscali",     presente: true },
+    { k:"bil",   label:"Bilancio CEE",              presente: righeInfo.tmpl.righe.bil },
+    { k:"cu770", label:"CU / Modello 770",          presente: righeInfo.tmpl.righe.cu770 },
+    { k:"cons",  label:"Consulenza generica",       presente: true },
+    { k:"domic", label:"Domiciliazione postale",    presente: righeInfo.tmpl.righe.domic },
+  ];
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
@@ -4024,8 +4280,13 @@ function Step5({ items, total, form, upd, T, onReset, onSalva, salvato, onGenera
                 <tr style={{ background:C.primary, color:"white" }}>
                   <td colSpan={2} style={{ padding:"13px 14px", fontWeight:700, fontSize:15 }}>
                     Compenso totale preventivato su base annua
+                    {righeInfo.cTot !== total && (
+                      <span style={{ fontWeight:400, fontSize:11, marginLeft:8, opacity:0.85 }}>
+                        (con ritocchi di riga — calcolato: {eur(total)})
+                      </span>
+                    )}
                   </td>
-                  <td style={{ padding:"13px 14px", textAlign:"right", fontWeight:700, fontSize:18 }}>{eur(total)}</td>
+                  <td style={{ padding:"13px 14px", textAlign:"right", fontWeight:700, fontSize:18 }}>{eur(righeInfo.cTot)}</td>
                 </tr>
                 <tr style={{ background:C.footerDark, color:"rgba(255,255,255,0.92)" }}>
                   <td colSpan={2} style={{ padding:"7px 14px", fontSize:13 }}>Sconto Concordato (€)</td>
@@ -4052,7 +4313,7 @@ function Step5({ items, total, form, upd, T, onReset, onSalva, salvato, onGenera
                     Compenso totale dovuto su base annua
                   </td>
                   <td style={{ padding:"10px 14px", textAlign:"right", fontWeight:700, fontSize:17 }}>
-                    {eur(Math.max(0, total - (parseFloat(form.scontoConcordato) || 0)))}
+                    {eur(Math.max(0, righeInfo.cTot - (parseFloat(form.scontoConcordato) || 0)))}
                   </td>
                 </tr>
               </tfoot>
@@ -4061,6 +4322,44 @@ function Step5({ items, total, form, upd, T, onReset, onSalva, salvato, onGenera
           <p style={{ fontSize:12, color:C.muted, textAlign:"center", marginTop:8 }}>
             {T.fonte} · Oltre iva e cassa di previdenza ad aliquota di legge
           </p>
+
+          {/* ── Ritocco finale degli importi di RIGA del documento (opzionale).
+                Flusso reale dello studio: componenti calcolati, poi la cifra
+                di riga viene arrotondata/concordata a mano (caso APE: la riga
+                Dichiarazioni portata da 5.341,36 a 5.342,00 €). Il campo vuoto
+                usa la somma calcolata. */}
+          <div style={{ marginTop:16, padding:"12px 16px", background:C.card,
+            border:`1px solid ${C.border}`, borderRadius:10 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:C.primary,
+              textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>
+              Ritocco finale importi di riga (opzionale)
+            </div>
+            <p style={{ margin:"0 0 10px", fontSize:11.5, color:C.muted }}>
+              Se vuoi arrotondare o concordare a mano l'importo di una riga del documento
+              (es. Contabilità a cifra tonda), inseriscilo qui: sostituisce la somma calcolata
+              nel preventivo e nel mandato. Campo vuoto = somma calcolata.
+            </p>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
+              {RIGHE_DEF.filter(r => r.presente).map(({k, label}) => {
+                const ovrVal = (form.rigaOverrides||{})[k] ?? "";
+                const attivo = parseNum(ovrVal) > 0;
+                return (
+                  <div key={k}>
+                    <label style={{ ...sty.lbl, fontSize:11.5, color:attivo?C.accent:C.muted }}>
+                      {label} — calcolato: {eur(righeInfo.calcolate[k])}
+                    </label>
+                    <input type="number" min="0" step="0.01"
+                      value={ovrVal}
+                      onChange={e => upd("rigaOverrides",
+                        { ...(form.rigaOverrides||{}), [k]: e.target.value })}
+                      placeholder="usa il calcolato"
+                      style={{ ...sty.inp, padding:"6px 8px", fontSize:13,
+                        ...(attivo ? { borderColor:C.accent, fontWeight:700 } : {}) }}/>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </>
       )}
     </div>
@@ -4515,6 +4814,10 @@ export default function App() {
 
   const upd = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const { items, total } = useMemo(() => calcAll(form, T), [form, T]);
+  // Righe del documento (con eventuali ritocchi finali di riga): stessa
+  // funzione usata dalla generazione documenti, così Riepilogo e .docx
+  // mostrano sempre gli stessi numeri.
+  const righeInfo = useMemo(() => calcRighe(form, items), [form, items]);
 
   // C'è un preventivo "in corso"? (form diverso dallo stato iniziale)
   const preventivoInCorso = useMemo(
@@ -4751,6 +5054,7 @@ export default function App() {
     if (!elig.usc      && form.hasUSC)      patch.hasUSC = false;
     if (!elig.bilancio && form.hasBilancio) patch.hasBilancio = false;
     if (!elig.lipe     && form.hasLipe)     patch.hasLipe = false;
+    if (!elig.lipe     && form.hasLipeGruppo) patch.hasLipeGruppo = false;
     if (!elig.dichIVA  && form.hasDichIVA)  patch.hasDichIVA = false;
     // 770 è override-abile, quindi NON lo deseleziono automaticamente
     if (Object.keys(patch).length) {
@@ -4829,7 +5133,7 @@ export default function App() {
 
         {/* Destra: totale + chiudi preventivo + toggle tema */}
         <div style={{ display:"flex", alignItems:"center", gap:12, flexShrink:0 }}>
-          {total > 0 && (
+          {righeInfo.cTot > 0 && (
             <div style={{ textAlign:"right",
               background:"rgba(255,255,255,0.08)",
               border:`1px solid rgba(255,255,255,0.12)`,
@@ -4840,7 +5144,7 @@ export default function App() {
               </div>
               <div style={{ fontWeight:800, fontSize:19,
                 fontFamily:"'Space Grotesk', 'Inter', sans-serif" }}>
-                {eur(total)}
+                {eur(righeInfo.cTot)}
               </div>
             </div>
           )}
@@ -4897,6 +5201,7 @@ export default function App() {
         {step===2 && <Step3 form={form} upd={upd} T={T}/>}
         {step===3 && <Step4 form={form} upd={upd} T={T}/>}
         {step===4 && <Step5 items={items} total={total} form={form} upd={upd} T={T}
+          righeInfo={righeInfo}
           onReset={resetPreventivo}
           onSalva={salvaClienteCorrente}
           salvato={!!clienteAttivoId}
@@ -4963,4 +5268,4 @@ export default function App() {
    EXPORT DI SERVIZIO — usati dai test automatici (harness Node) e
    potenzialmente da altre finestre. Non influiscono sull'app.
    ================================================================ */
-export { calcAll, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
+export { calcAll, calcRighe, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
