@@ -1577,6 +1577,41 @@ function _docx_handleMarkerPair(xml, mark, removeBlock) {
   return xml.split(open).join('').split(close).join('');
 }
 
+// Escape del testo inserito nell'XML del documento
+function _xmlEsc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// "Prestazioni aggiuntive all'occorrenza": servizi elencati con il loro
+// prezzo ma NON compresi nel compenso annuo (si fatturano a consuntivo).
+// Non esistono nel template vuoto: vengono inseriti qui, subito dopo la
+// frase del totale della sezione (ancorandosi al token {{S_...}}, prima
+// che venga sostituito). Stile clonato dal paragrafo-ancora, così font,
+// corpo e allineamento restano quelli del documento.
+function _docx_insertPrestazioni(xml, token, titolo, righe) {
+  if (!righe || !righe.length) return xml;
+  const idx = xml.indexOf(token);
+  if (idx < 0) return xml;            // sezione non presente in questo template
+  const pStart = xml.lastIndexOf('<w:p ', idx);
+  const pEndAt = xml.indexOf('</w:p>', idx);
+  if (pStart < 0 || pEndAt < 0) return xml;
+  const pEnd = pEndAt + '</w:p>'.length;
+  const para = xml.slice(pStart, pEnd);
+
+  const pPr = (para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [''])[0];
+  const firstRun = (para.match(/<w:r>[\s\S]*?<\/w:r>/) || [''])[0];
+  const rPrTitolo = (firstRun.match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [''])[0];
+  const rPrRiga   = rPrTitolo.replace(/<w:b\/>|<w:bCs\/>/g, '');   // righe non in grassetto
+
+  const mk = (rPr, testo) =>
+    `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${_xmlEsc(testo)}</w:t></w:r></w:p>`;
+
+  const blocco = `<w:p>${pPr}</w:p>`                 // riga vuota di stacco
+    + mk(rPrTitolo, titolo)
+    + righe.map(t => mk(rPrRiga, t)).join('');
+  return xml.slice(0, pEnd) + blocco + xml.slice(pEnd);
+}
+
 // Mandato: se è stato scelto un commercialista di riferimento, l'elenco
 // CONFERISCE tiene SOLO lui (il paragrafo resta e diventa nero); gli altri
 // sei paragrafi vengono rimossi. Senza scelta l'elenco resta intero (rosso).
@@ -1880,6 +1915,40 @@ async function generaDocumenti(form, items, T) {
     prevTransforms.push(xml => _docx_removeParasWithText(xml, F24_CLIENTE));
     prevTransforms.push(xml => _docx_derossaParasWithText(xml, F24_STUDIO));
   }
+  // "Prestazioni aggiuntive all'occorrenza" per sezione (non nel totale).
+  // Ancorate ai token {{S_...}}: l'inserimento avviene PRIMA della
+  // sostituzione dei token, quindi l'ancora è ancora presente nell'XML.
+  {
+    const PREST_TOKENS = { cont:'{{S_CONT}}', dich:'{{S_DICH}}', bil:'{{S_BIL}}',
+                           cu770:'{{S_CU770}}', cons:'{{S_CONS}}', domic:'{{S_DOMIC}}' };
+    const PREST_LABEL  = { cont:'Contabilità', dich:'Dichiarazioni', bil:'Bilancio CEE',
+                           cu770:'CU / Modello 770', cons:'Consulenza', domic:'Domiciliazione' };
+    const perSezione = {};
+    for (const p of (form.prestAggiuntive || [])) {
+      const testo = (p.testo || '').trim();
+      if (!testo) continue;
+      const sez = p.sezione || 'cons';
+      if (!perSezione[sez]) perSezione[sez] = [];
+      perSezione[sez].push(testo);
+    }
+    for (const sez of Object.keys(perSezione)) {
+      const tk = PREST_TOKENS[sez];
+      // La sezione esiste nel template scelto? (es. Bilancio solo in Srl/Consulenze)
+      const presente = sez === 'cont'  ? tmpl.righe.cont
+                     : sez === 'bil'   ? tmpl.righe.bil
+                     : sez === 'cu770' ? tmpl.righe.cu770
+                     : sez === 'domic' ? tmpl.righe.domic
+                     : true;
+      if (!tk || !presente) {
+        warnings.push(`Prestazioni aggiuntive della sezione "${PREST_LABEL[sez] || sez}" non inserite: quella sezione non esiste nel template ${tmpl.nome}.`);
+        continue;
+      }
+      const righeSez = perSezione[sez];
+      prevTransforms.push(xml => _docx_insertPrestazioni(
+        xml, tk, "Prestazioni aggiuntive all'occorrenza", righeSez));
+    }
+  }
+
   // Punto 15 — gestione posizione previdenziale INPS vs Casse
   const INPS_BULLET = 'la gestione della posizione previdenziale del titolare';
   const cassaEsclusiva = form.tipoAttivita === 'professionista_cassa' || (form.hasCasse && !form.hasINPS);
@@ -2170,6 +2239,10 @@ const INIT = {
   // caso APE: riga 1.2 portata a 5.342 €). Chiavi: cont, dich, bil, cu770,
   // cons, domic. Vuoto = usa la somma calcolata.
   rigaOverrides:{},
+  // "Prestazioni aggiuntive all'occorrenza": servizi elencati nel dettaglio
+  // di una sezione con il loro prezzo ma NON compresi nel compenso annuo
+  // (si fatturano a consuntivo). Array di { id, sezione, testo }.
+  prestAggiuntive:[],
   hasConsulenza:false, consulenzaRicavi:"",
   // Consulenza: come per le dichiarazioni, scelta tra tariffario (fascia
   // ricavi) e importo annuo concordato a mano (richiesta del consulente).
@@ -4359,6 +4432,62 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
                 );
               })}
             </div>
+          </div>
+
+          {/* ── Prestazioni aggiuntive all'occorrenza: servizi elencati nel
+                dettaglio della sezione con il loro prezzo, ma NON compresi nel
+                compenso annuo (si fatturano a consuntivo). */}
+          <div style={{ marginTop:16, padding:"12px 16px", background:C.card,
+            border:`1px solid ${C.border}`, borderRadius:10 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:C.primary,
+              textTransform:"uppercase", letterSpacing:"0.06em", marginBottom:4 }}>
+              Prestazioni aggiuntive all'occorrenza (non incluse nel totale)
+            </div>
+            <p style={{ margin:"0 0 10px", fontSize:11.5, color:C.muted }}>
+              Servizi che compaiono nel dettaglio della sezione scelta con il loro prezzo, ma che
+              <strong> non entrano nel compenso annuo</strong> (si fatturano a consuntivo).
+              Scrivi la riga come deve apparire nel documento, prezzo compreso —
+              es. "Invio telematico F24 con compensazioni crediti € 12,00 per F24".
+            </p>
+            {(form.prestAggiuntive || []).map((p, i) => (
+              <div key={p.id} style={{ display:"grid",
+                gridTemplateColumns:"1fr 3fr auto", gap:8, alignItems:"end", marginBottom:8 }}>
+                <div>
+                  {i===0 && <label style={{ ...sty.lbl, fontSize:11.5 }}>Sezione</label>}
+                  <select value={p.sezione || "cons"}
+                    onChange={e=>{
+                      const arr=[...form.prestAggiuntive]; arr[i]={...arr[i], sezione:e.target.value};
+                      upd("prestAggiuntive",arr);
+                    }}
+                    style={{ ...sty.inp, padding:"8px 10px", fontSize:13 }}>
+                    {RIGHE_DEF.filter(r => r.presente).map(r => (
+                      <option key={r.k} value={r.k}>{r.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <Inp label={i===0?"Riga da inserire nel documento":""} value={p.testo}
+                  onChange={val=>{
+                    const arr=[...form.prestAggiuntive]; arr[i]={...arr[i], testo:val};
+                    upd("prestAggiuntive",arr);
+                  }}
+                  placeholder="Es. Pratica deposito Bilancio Consolidato elaborato da cliente € 100,00"/>
+                <button onClick={()=>{
+                    upd("prestAggiuntive", form.prestAggiuntive.filter((_,j)=>j!==i));
+                  }}
+                  title="Rimuovi questa riga"
+                  style={{ padding:"8px 12px", borderRadius:6, border:`1px solid ${C.border}`,
+                    background:C.card, color:C.warn, cursor:"pointer", fontWeight:700 }}>✕</button>
+              </div>
+            ))}
+            <button onClick={()=>{
+                const arr=[...(form.prestAggiuntive||[]),
+                  { id:`pa_${Date.now()}_${Math.floor(Math.random()*1e4)}`, sezione:"cons", testo:"" }];
+                upd("prestAggiuntive",arr);
+              }}
+              style={{ padding:"8px 14px", borderRadius:6, border:`1px dashed ${C.accent}`,
+                background:"transparent", color:C.accent, cursor:"pointer", fontWeight:600, fontSize:13 }}>
+              + Aggiungi prestazione aggiuntiva
+            </button>
           </div>
         </>
       )}
