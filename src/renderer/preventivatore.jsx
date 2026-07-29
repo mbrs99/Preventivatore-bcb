@@ -1318,8 +1318,11 @@ function b64ToUint8(b64) {
 function replaceAll(str, map) {
   let out = str;
   for (const [k,v] of Object.entries(map)) {
+    // I valori finiscono dentro l'XML del documento: vanno codificati,
+    // altrimenti un cliente con "&" o "<" nel nome (es. "Rossi & Figli Snc")
+    // genera un file .docx corrotto che Word si rifiuta di aprire.
     // Il token nel XML potrebbe avere spazi interni — match esatto
-    out = out.split(k).join(v);
+    out = out.split(k).join(_xmlEsc(v));
   }
   return out;
 }
@@ -1544,6 +1547,47 @@ function _docx_derossaParasWithText(xml, needle) {
     text.includes(needle) ? para.replace(/<w:color w:val="[^"]*"\s*\/>/g, '') : undefined);
 }
 
+// Rimuove i paragrafi il cui testo contiene `needle`, ignorando maiuscole
+// e minuscole (i template scrivono "F24 IMU" o "F24 Imu" a seconda del file)
+function _docx_removeParasWithTextCI(xml, needle) {
+  const ago = needle.toLowerCase();
+  return _docx_mapParas(xml, (para, text) =>
+    text.toLowerCase().includes(ago) ? '' : undefined);
+}
+
+// Inserisce un nuovo paragrafo subito dopo quello che contiene `anchorText`,
+// clonandone lo stile: se l'ancora è un punto elenco, anche il nuovo lo è.
+function _docx_insertParaAfter(xml, anchorText, nuovoTesto) {
+  let ancora = null;
+  for (const m of xml.matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)) {
+    if (_docx_textOf(m[0]).includes(anchorText)) { ancora = m; break; }
+  }
+  if (!ancora) return xml;
+  const para = ancora[0], fine = ancora.index + para.length;
+  const pPr = (para.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [''])[0];
+  const firstRun = (para.match(/<w:r[ >][\s\S]*?<\/w:r>/) || [''])[0];
+  const rPr = (firstRun.match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [''])[0];
+  const nuovo = `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${_xmlEsc(nuovoTesto)}</w:t></w:r></w:p>`;
+  return xml.slice(0, fine) + nuovo + xml.slice(fine);
+}
+
+// Sostituisce il segnaposto "____" dentro il paragrafo che contiene `anchorText`
+// con il valore indicato (o rimuove l'intero paragrafo se il valore è vuoto:
+// un preventivo non deve arrivare al cliente con righe da riempire a penna).
+function _docx_compilaOppureRimuovi(xml, anchorText, valore) {
+  const v = String(valore ?? "").trim();
+  if (!v) return _docx_removeParasWithText(xml, anchorText);
+  return _docx_mapParas(xml, (para, text) => {
+    if (!text.includes(anchorText)) return undefined;
+    let fatto = false;
+    return para.replace(/(<w:t(?: [^>]*)?>)([^<]*)(<\/w:t>)/g, (m, a, t, z) => {
+      if (fatto || !/_{3,}/.test(t)) return m;
+      fatto = true;
+      return a + t.replace(/_{3,}/, _xmlEsc(v)) + z;
+    });
+  });
+}
+
 // Toglie il colore dai singoli run il cui testo contiene `needle`
 function _docx_derossaRunsWithText(xml, needle) {
   return xml.replace(/<w:r(?: [^>]*)?>[\s\S]*?<\/w:r>/g, run => {
@@ -1763,12 +1807,26 @@ function calcRighe(form, items) {
 
   const calcolate = { cont:cCont, dich:cDich, bil:cBil, cu770:cCU770, cons:cCons, domic:cDomic };
 
-  // Ritocchi finali di riga (importo concordato per riga del documento)
+  // Quali righe esistono davvero nel modello scelto (Dichiarazioni e
+  // Consulenza ci sono sempre; le altre dipendono dal regime).
+  const presente = {
+    cont: tmpl.righe.cont, dich: true, bil: tmpl.righe.bil,
+    cu770: tmpl.righe.cu770, cons: true, domic: tmpl.righe.domic,
+  };
+
+  // Ritocchi finali di riga (importo concordato per riga del documento).
+  // Si applicano SOLO alle righe presenti nel modello: altrimenti un ritocco
+  // rimasto da un regime precedente (es. bilancio impostato per una Srl e poi
+  // il cliente passa a forfettario) gonfierebbe il totale con un importo che
+  // nel documento non compare in nessuna riga.
   const ovr = form.rigaOverrides || {};
   const eff = {};
   for (const k of Object.keys(calcolate)) {
     const v = parseNum(ovr[k]);
-    eff[k] = v > 0 ? v : calcolate[k];
+    if (v > 0 && !presente[k]) {
+      warnings.push(`Ritocco della riga "${k}" ignorato: quella riga non esiste nel modello ${tmpl.nome}.`);
+    }
+    eff[k] = (v > 0 && presente[k]) ? v : calcolate[k];
   }
   const cTot = eff.cont + eff.dich + eff.bil + eff.cu770 + eff.cons + eff.domic;
 
@@ -1795,6 +1853,13 @@ async function generaDocumenti(form, items, T) {
   // contratto/informativa. Clamp a 0 se negativo o superiore al totale.
   const scontoAnnuo  = Math.min(cTot,    Math.max(0, parseFloat(form.scontoConcordato)        || 0));
   const scontoTantum = Math.min(cTantum, Math.max(0, parseFloat(form.scontoConcordatoTantum)  || 0));
+  // Uno sconto superiore al totale viene limitato al totale (il compenso non
+  // può diventare negativo): lo segnaliamo, perché di solito è un errore
+  // di battitura e il documento uscirebbe con "€ 0,00" da pagare.
+  if ((parseFloat(form.scontoConcordato) || 0) > cTot && cTot > 0)
+    warnings.push(`Lo sconto inserito (${eur(parseFloat(form.scontoConcordato))}) supera il totale (${eur(cTot)}): è stato limitato al totale, quindi il compenso dovuto risulta zero.`);
+  if ((parseFloat(form.scontoConcordatoTantum) || 0) > cTantum && cTantum > 0)
+    warnings.push(`Lo sconto sull'una tantum supera l'importo della pratica: è stato limitato, quindi il dovuto risulta zero.`);
   const cTotNetto    = cTot    - scontoAnnuo;
   const cTantumNetto = cTantum - scontoTantum;
   const tantumPresente = cTantum > 0;
@@ -1872,6 +1937,9 @@ async function generaDocumenti(form, items, T) {
     '{{D_CONT}}': tantumPresente ? '2' : '1',
     '{{D_DICH}}': tantumPresente ? '3' : '2',
     '{{D_CONS}}': tantumPresente ? '4' : '3',
+    // Numero della sezione di dettaglio della domiciliazione: segue la riga
+    // della tabella riepilogo, che cambia da modello a modello.
+    '{{D_DOMIC}}': (tmpl.key === 'srl') ? '6' : '5',
     '{{PAGAMENTO}}': pagamentoText,
   };
 
@@ -1946,6 +2014,49 @@ async function generaDocumenti(form, items, T) {
       prevTransforms.push(xml => _docx_insertPrestazioni(
         xml, tk, "Prestazioni aggiuntive all'occorrenza", righeSez));
     }
+  }
+
+  // ── Sezione di dettaglio della domiciliazione: presente nei template ma
+  // rimossa se il servizio non è stato preventivato.
+  prevTransforms.push(xml => _docx_handleMarkerPair(xml, 'DOMIC_BLOCK', !(cDomic > 0)));
+
+  // ── Sezioni di dettaglio dei servizi NON preventivati: vanno tolte.
+  // Nella tabella riepilogo la riga mostra già "—", ma senza questa pulizia
+  // il dettaglio resterebbe con "Per le prestazioni sopra elencate il
+  // preventivo di massima ammonta ad € 0,00 (zero/00 centesimi)" — che è
+  // quanto la consulente cancellava a mano.
+  for (const [token, importo] of [
+    ['{{S_CONT}}',  cCont],
+    ['{{S_DICH}}',  cDich],
+    ['{{S_BIL}}',   cBil],
+    ['{{S_CU770}}', cCU770],
+    ['{{S_CONS}}',  cCons],
+  ]) {
+    if (!(importo > 0)) prevTransforms.push(xml => _docx_removeTableContaining(xml, token));
+  }
+
+  // ── LIPE IVA di Gruppo: quando è attiva, il dettaglio 1.2 deve dirlo
+  // (richiesta della consulente — nel suo documento definitivo la riga c'è).
+  if (form.hasLipeGruppo) {
+    prevTransforms.push(xml => _docx_insertParaAfter(xml,
+      'Comunicazioni Liquidazioni Periodiche Iva trimestrali',
+      'la predisposizione delle Comunicazioni Liquidazioni Periodiche trimestrali Iva GRUPPO e relativi invii telematici;'));
+  }
+
+  // ── Voci del dettaglio con segnaposto: compilate col valore indicato,
+  // oppure rimosse (un preventivo non deve uscire con righe "____" vuote).
+  prevTransforms.push(xml => _docx_compilaOppureRimuovi(xml,
+    'dichiarazione dei redditi di n°', form.nSociDich));
+  prevTransforms.push(xml => _docx_compilaOppureRimuovi(xml,
+    'predisposizione del modello 730 per', form.soggetti730));
+
+  // ── Servizi elencati nel dettaglio ma NON preventivati: vanno tolti,
+  // altrimenti il documento promette prestazioni che non sono state pagate.
+  if (!form.hasSistemaTS) {
+    prevTransforms.push(xml => _docx_removeParasWithTextCI(xml, 'dati al Sistema TS'));
+  }
+  if (!form.hasImuF24 && !form.hasImuDich) {
+    prevTransforms.push(xml => _docx_removeParasWithTextCI(xml, 'modelli F24 Imu'));
   }
 
   // Punto 15 — gestione posizione previdenziale INPS vs Casse
@@ -2116,6 +2227,10 @@ const INIT = {
   // della consulente: caso APE, 4 invii aggiuntivi per l'IVA di gruppo).
   hasLipeGruppo:false, nInviiLipeGruppo:4,
   lipeGruppoModo:"", lipeGruppoTariffaBase:"",
+  // Voci del dettaglio 1.2 con segnaposto da compilare: se restano vuote la
+  // riga viene tolta dal documento (niente "____" davanti al cliente).
+  nSociDich:"",        // "dichiarazione dei redditi di n° ___ soci"
+  soggetti730:"",      // "assistenza nella predisposizione del modello 730 per ___"
   hasDichIVA:false,
   dichIvaModo:"", dichIvaTariffaBase:"",
   hasUPF:false,   upfQuadri:{base:true}, upfRighe:{},
@@ -3466,6 +3581,23 @@ function Step3({ form, upd, T }) {
         subtitle="Se inclusa, nel preventivo stampato “IRAP” appare in nero; altrimenti resta in rosso">
         <Chk label="La predisposizione e l'invio della dichiarazione IRAP sono inclusi nell'incarico"
           checked={form.hasIrap} onChange={()=>upd("hasIrap",!form.hasIrap)}/>
+      </Card>
+
+      {/* Voci del dettaglio 1.2 che nel template hanno un segnaposto da
+          compilare a mano. Se restano vuote la riga viene tolta dal
+          documento, così al cliente non arrivano righe con "______". */}
+      <Card title="Dichiarazioni di soci e 730 (per il documento)" alwaysOpen
+        subtitle="Compila solo se previsti: se lasci vuoto, la voce non compare nel preventivo">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 2fr", gap:12 }}>
+          <Inp label="Dichiarazione redditi soci — quanti" value={form.nSociDich}
+            onChange={v=>upd("nSociDich",v)} type="number" min="0" placeholder="es. 3"/>
+          <Inp label="Modello 730 — per chi" value={form.soggetti730}
+            onChange={v=>upd("soggetti730",v)} placeholder="es. il titolare e il coniuge"/>
+        </div>
+        <p style={{ margin:"8px 0 0", fontSize:11.5, color:C.muted, fontStyle:"italic" }}>
+          Questi campi non incidono sul totale: servono a compilare (o togliere) i due punti
+          del dettaglio "1.2 Dichiarazioni" che nel modello Word hanno uno spazio vuoto.
+        </p>
       </Card>
 
       {elig.sistemats ? (
