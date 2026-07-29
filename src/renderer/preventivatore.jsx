@@ -4256,6 +4256,28 @@ function ordinaPerGruppo(items) {
     .map(x => x.it);
 }
 
+/* Numero di sezione (1.1, 1.2, …) di ciascuna riga nel documento che verrà
+   generato. Non è fisso: dipende da quali righe esistono nel modello scelto.
+     Forfettari  → cont · dich · cons            (e scala di 1 se c'è l'apertura,
+                    perché lì la numerazione prosegue dopo la tabella una tantum)
+     Semplificate/Ordinarie non Srl → cont · dich · CU-770 · cons · domic
+     Ordinarie Srl → cont · dich · bilancio · CU-770 · cons · domic
+     Consulenze   → dich · bilancio · CU-770 · cons · domic   (senza contabilità)
+   Negli altri modelli la tabella annuale riparte sempre da 1.1, anche quando
+   sopra c'è la tabella dell'una tantum. */
+function numeriRighe(tmpl, tantumPresente) {
+  const presente = {
+    cont: tmpl.righe.cont, dich: true, bil: tmpl.righe.bil,
+    cu770: tmpl.righe.cu770, cons: true, domic: tmpl.righe.domic,
+  };
+  let n = (tmpl.key === "forf" && tantumPresente) ? 2 : 1;
+  const out = {};
+  for (const k of ["cont", "dich", "bil", "cu770", "cons", "domic"]) {
+    if (presente[k]) out[k] = `1.${n++}`;
+  }
+  return out;
+}
+
 /* ────────────────────────────────────────────────────────────────
    Scheda riepilogativa in HTML — è quella che finisce nel PDF.
    Contiene SOLO le informazioni del riepilogo (cliente, voci, totali),
@@ -4360,14 +4382,18 @@ ${items.filter(i=>!i.sub).length ? `<table>
 function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvato,
                 onSalvaPdf, pdfLoading, onGeneraDocs, genLoading, docLinks, genWarning }) {
   // Righe del documento: definizione (chiave, etichetta, presenza nel template)
+  // I numeri di sezione dipendono dal modello scelto (e dalla presenza
+  // dell'una tantum nel Forfettari): vanno calcolati, non scritti a mano.
+  const nRig = numeriRighe(righeInfo.tmpl,
+    form.hasTariffaApertura && (parseFloat(form.tariffaApertura) || 0) > 0);
   const RIGHE_DEF = [
-    { k:"cont",  label:"Contabilità (1.1)",        presente: righeInfo.tmpl.righe.cont },
-    { k:"dich",  label:"Dichiarazioni fiscali",     presente: true },
-    { k:"bil",   label:"Bilancio CEE",              presente: righeInfo.tmpl.righe.bil },
-    { k:"cu770", label:"CU / Modello 770",          presente: righeInfo.tmpl.righe.cu770 },
-    { k:"cons",  label:"Consulenza generica",       presente: true },
-    { k:"domic", label:"Domiciliazione postale",    presente: righeInfo.tmpl.righe.domic },
-  ];
+    { k:"cont",  nome:"Contabilità",             presente: righeInfo.tmpl.righe.cont },
+    { k:"dich",  nome:"Dichiarazioni fiscali",   presente: true },
+    { k:"bil",   nome:"Bilancio CEE",            presente: righeInfo.tmpl.righe.bil },
+    { k:"cu770", nome:"CU / Modello 770",        presente: righeInfo.tmpl.righe.cu770 },
+    { k:"cons",  nome:"Consulenza generica",     presente: true },
+    { k:"domic", nome:"Domiciliazione postale",  presente: righeInfo.tmpl.righe.domic },
+  ].map(r => ({ ...r, label: nRig[r.k] ? `${nRig[r.k]} ${r.nome}` : r.nome }));
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
@@ -5692,4 +5718,4 @@ export default function App() {
    EXPORT DI SERVIZIO — usati dai test automatici (harness Node) e
    potenzialmente da altre finestre. Non influiscono sull'app.
    ================================================================ */
-export { calcAll, calcRighe, riepilogoHTML, GLOBAL_CSS, THEMES, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
+export { calcAll, calcRighe, riepilogoHTML, numeriRighe, GLOBAL_CSS, THEMES, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
