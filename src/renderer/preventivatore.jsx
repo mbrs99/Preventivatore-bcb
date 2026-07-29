@@ -4290,7 +4290,13 @@ function riepilogoHTML(items, form, T, righeInfo) {
              : form.pagamentoModo === "bonifico" ? "Bonifico bancario" : "non specificato";
 
   return `<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="color-scheme" content="light">
 <title>Riepilogo preventivo — ${esc(cliente)}</title><style>
+  /* Il documento è SEMPRE in versione chiara, anche se l'app o il sistema
+     operativo sono in tema scuro: è un foglio destinato alla stampa e al
+     cliente, quindi fondo bianco e testo scuro a prescindere. */
+  :root { color-scheme: light; }
+  html, body { background:#ffffff; }
   * { box-sizing:border-box; }
   body { font-family:-apple-system,'Segoe UI',Arial,sans-serif; color:#1a1a1a;
          font-size:11.5pt; margin:0; }
@@ -4860,6 +4866,25 @@ input:-webkit-autofill:focus {
   -webkit-box-shadow: 0 0 0 1000px var(--c-inputBg) inset;
   transition: background-color 9999s ease-in-out 0s;
   caret-color: var(--c-text);
+}
+
+/* ── STAMPA: sempre in versione chiara ─────────────────────────────
+   Il tema scuro serve a lavorare a schermo; su carta (o in un PDF
+   creato dalla stampa) darebbe pagine nere, illeggibili e sprecone
+   di inchiostro. Qui si ripristina la palette chiara a prescindere
+   dal tema attivo. Le regole usano !important perché il tema viene
+   applicato come stile inline su :root, che altrimenti prevarrebbe. */
+@media print {
+  :root {
+    color-scheme: light !important;
+${Object.entries(THEMES.light).map(([k, v]) => `    --c-${k}: ${v} !important;`).join("\n")}
+  }
+  html, body {
+    background: #ffffff !important;
+    color: ${THEMES.light.text} !important;
+  }
+  /* Comandi e navigazione non servono sul foglio */
+  button, select, .no-print { display: none !important; }
 }
 `;
 
@@ -5667,4 +5692,4 @@ export default function App() {
    EXPORT DI SERVIZIO — usati dai test automatici (harness Node) e
    potenzialmente da altre finestre. Non influiscono sull'app.
    ================================================================ */
-export { calcAll, calcRighe, riepilogoHTML, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
+export { calcAll, calcRighe, riepilogoHTML, GLOBAL_CSS, THEMES, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
