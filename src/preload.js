@@ -47,6 +47,11 @@ contextBridge.exposeInMainWorld('tariffarioAPI', {
   saveBuffer:         (path, buffer) => ipcRenderer.invoke('tariffario:saveBuffer', { path, buffer }),
 });
 
+// window.pdfAPI — salvataggio del riepilogo come file PDF
+contextBridge.exposeInMainWorld('pdfAPI', {
+  salvaRiepilogo: (html, nomeFile) => ipcRenderer.invoke('pdf:salvaRiepilogo', { html, nomeFile }),
+});
+
 // window.authAPI — gestione del lock con password remota (modalità STRICT)
 contextBridge.exposeInMainWorld('authAPI', {
   unlock:           (password) => ipcRenderer.invoke('auth:unlock', password),

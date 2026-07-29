@@ -574,6 +574,40 @@ ipcMain.handle('tariffario:saveBuffer', async (_, { path: filePath, buffer }) =>
   }
 });
 
+/* ---------------- IPC Handler: PDF del riepilogo ------------------
+   Riceve dal renderer l'HTML del solo riepilogo (non tutta la finestra
+   dell'app), lo apre in una finestra nascosta e lo converte in PDF.
+   Così il file contiene esattamente la scheda riepilogativa, senza
+   pulsanti, schede di navigazione o altri elementi dell'interfaccia. */
+
+ipcMain.handle('pdf:salvaRiepilogo', async (_, { html, nomeFile }) => {
+  const result = await dialog.showSaveDialog({
+    title: 'Salva il riepilogo in PDF',
+    defaultPath: nomeFile || 'riepilogo.pdf',
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  });
+  if (result.canceled) return { ok: false, canceled: true };
+
+  let win = null;
+  try {
+    // Finestra nascosta e senza JavaScript: serve solo a impaginare l'HTML
+    win = new BrowserWindow({ show: false, webPreferences: { javascript: false } });
+    // Il contenuto arriva come data URL: nessun file temporaneo su disco
+    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    const pdf = await win.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      margins: { marginType: 'custom', top: 0.6, bottom: 0.6, left: 0.5, right: 0.5 },
+    });
+    await fsp.writeFile(result.filePath, pdf);
+    return { ok: true, path: result.filePath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  } finally {
+    if (win && !win.isDestroyed()) win.destroy();
+  }
+});
+
 /* ---------------- IPC Handlers: auth (lock con password STRICT) -- */
 
 ipcMain.handle('auth:isUnlocked', async () => {

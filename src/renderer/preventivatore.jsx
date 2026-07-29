@@ -4238,7 +4238,121 @@ function Step4({ form, upd, T }) {
 /* ================================================================
    STEP 5 – RIEPILOGO
    ================================================================ */
-function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvato, onGeneraDocs, genLoading, docLinks, genWarning }) {
+/* Ordine con cui i gruppi compaiono nel riepilogo e nel PDF. Serve perché
+   alcune voci (voci libere, domiciliazione) sono calcolate in fondo a
+   calcAll: senza riordino un gruppo già mostrato ricomparirebbe più sotto
+   con la stessa intestazione. L'ordine dentro ogni gruppo resta quello di
+   calcolo, e i totali non cambiano. */
+const ORDINE_GRUPPI = ["Contabilità", "Bilancio", "Dichiarazioni",
+  "CU / Modello 770", "Modello 770", "770", "IMU", "Consulenza", "Domiciliazione"];
+function ordinaPerGruppo(items) {
+  const pos = g => {
+    const i = ORDINE_GRUPPI.indexOf(g || "");
+    return i < 0 ? ORDINE_GRUPPI.length - 1 : i;   // gruppi ignoti: con la Consulenza
+  };
+  return items
+    .map((it, i) => ({ it, i }))
+    .sort((a, b) => pos(a.it.group) - pos(b.it.group) || a.i - b.i)
+    .map(x => x.it);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Scheda riepilogativa in HTML — è quella che finisce nel PDF.
+   Contiene SOLO le informazioni del riepilogo (cliente, voci, totali),
+   senza pulsanti né altri elementi dell'interfaccia.
+   ──────────────────────────────────────────────────────────────── */
+function riepilogoHTML(items, form, T, righeInfo) {
+  const esc = s => String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const isSoc = form.tipoCliente === "soc_persone" || form.tipoCliente === "soc_capitali";
+  const cliente = (isSoc ? (form.nomeSocieta || form.ragioneSociale)
+                         : `${form.nome||""} ${form.cognome||""}`.trim() || form.ragioneSociale)
+                  || "Cliente non specificato";
+  const totale  = righeInfo.cTot;
+  const sconto  = Math.min(totale, Math.max(0, parseFloat(form.scontoConcordato) || 0));
+  const netto   = totale - sconto;
+  const tantum       = form.hasTariffaApertura ? (parseFloat(form.tariffaApertura) || 0) : 0;
+  const scontoTantum = Math.min(tantum, Math.max(0, parseFloat(form.scontoConcordatoTantum) || 0));
+
+  // Voci raggruppate come nel riepilogo a schermo (senza le sotto-righe)
+  let righe = "", gruppo = null;
+  for (const it of ordinaPerGruppo(items.filter(i => !i.sub))) {
+    if (it.group && it.group !== gruppo) {
+      gruppo = it.group;
+      righe += `<tr class="g"><td colspan="3">${esc(gruppo)}</td></tr>`;
+    }
+    const imp = (it.val === 0 && String(it.detail||"").includes("⚠")) ? "da inserire" : eur(it.val);
+    righe += `<tr><td>${esc(it.label)}</td><td class="d">${esc(it.detail)}</td>`
+           + `<td class="n">${esc(imp)}</td></tr>`;
+  }
+
+  const fatt = form.fatturazioneGlobale || "non specificata";
+  const pag  = form.pagamentoModo === "rid" ? "Addebito RID / S.D.D."
+             : form.pagamentoModo === "bonifico" ? "Bonifico bancario" : "non specificato";
+
+  return `<!doctype html><html lang="it"><head><meta charset="utf-8">
+<title>Riepilogo preventivo — ${esc(cliente)}</title><style>
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,'Segoe UI',Arial,sans-serif; color:#1a1a1a;
+         font-size:11.5pt; margin:0; }
+  h1 { font-size:15pt; margin:0 0 2px; color:#1e3a5f; }
+  .sub { font-size:9pt; color:#666; margin-bottom:14px;
+         border-bottom:2px solid #1e3a5f; padding-bottom:8px; }
+  .cli { background:#f4f6f9; border:1px solid #d8dee6; border-radius:5px;
+         padding:9px 12px; margin-bottom:14px; }
+  .cli b { font-size:12.5pt; }
+  .cli div { font-size:9.5pt; color:#555; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; }
+  th { background:#1e3a5f; color:#fff; text-align:left; padding:7px 9px; font-size:10pt; }
+  th.n, td.n { text-align:right; white-space:nowrap; }
+  td { padding:5px 9px; border-bottom:1px solid #e4e8ee; vertical-align:top; }
+  td.d { color:#777; font-size:9pt; }
+  tr.g td { background:#eef2f7; font-weight:700; font-size:8.5pt; color:#1e3a5f;
+            text-transform:uppercase; letter-spacing:.5px; padding:4px 9px; }
+  tr.tot td { background:#1e3a5f; color:#fff; font-weight:700; font-size:11.5pt; padding:9px; }
+  tr.sc  td { background:#33506f; color:#fff; font-size:10pt; padding:6px 9px; }
+  tr.net td { background:#12263f; color:#fff; font-weight:700; font-size:12pt; padding:9px; }
+  /* Il blocco "una tantum" usa una tabella (non flexbox) così l'allineamento
+     degli importi è identico in qualunque programma apra il PDF. */
+  table.box { margin-bottom:14px; border:1px solid #d8dee6; }
+  table.box td { border-bottom:none; border-top:1px solid #e4e8ee; font-size:10.5pt; }
+  table.box td.h { background:#eef2f7; font-size:8.5pt; font-weight:700; border-top:none;
+                   color:#1e3a5f; text-transform:uppercase; letter-spacing:.5px; }
+  .note { margin-top:14px; font-size:9pt; color:#666; text-align:center;
+          border-top:1px solid #e4e8ee; padding-top:8px; }
+</style></head><body>
+<h1>Riepilogo preventivo</h1>
+<div class="sub">Studio Commercialista BCB — Barea Canal Bares Professionisti Associati</div>
+
+<div class="cli"><b>${esc(cliente)}</b>
+  ${form.note ? `<div>Note: ${esc(form.note)}</div>` : ""}
+  <div>Fatturazione: ${esc(fatt)} · Pagamento: ${esc(pag)}${
+    form.commercialistaRif ? ` · Riferimento: ${esc(form.commercialistaRif)}` : ""}</div>
+  <div>Documento del ${esc(form.dataDocumento || todayIT())}</div>
+</div>
+
+${tantum > 0 ? `<table class="box">
+  <tr><td class="h" colspan="2">Compenso una tantum (non ricorrente)</td></tr>
+  <tr><td>Consulenza apertura ditta / Costituzione società</td><td class="n"><b>${eur(tantum)}</b></td></tr>
+  ${scontoTantum > 0 ? `<tr><td>Sconto concordato</td><td class="n">− ${eur(scontoTantum)}</td></tr>` : ""}
+  <tr><td><b>Totale una tantum</b></td><td class="n"><b>${eur(tantum - scontoTantum)}</b></td></tr>
+</table>` : ""}
+
+${items.filter(i=>!i.sub).length ? `<table>
+  <thead><tr><th>Servizio</th><th>Dettaglio</th><th class="n">Importo</th></tr></thead>
+  <tbody>${righe}</tbody>
+  <tfoot>
+    <tr class="tot"><td colspan="2">Compenso totale preventivato su base annua</td><td class="n">${eur(totale)}</td></tr>
+    ${sconto > 0 ? `<tr class="sc"><td colspan="2">Sconto concordato</td><td class="n">− ${eur(sconto)}</td></tr>` : ""}
+    <tr class="net"><td colspan="2">Compenso totale dovuto su base annua</td><td class="n">${eur(netto)}</td></tr>
+  </tfoot>
+</table>` : `<p style="color:#777">Nessun servizio configurato.</p>`}
+
+<div class="note">${esc(T.fonte)} · Oltre iva e cassa di previdenza ad aliquota di legge</div>
+</body></html>`;
+}
+
+function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvato,
+                onSalvaPdf, pdfLoading, onGeneraDocs, genLoading, docLinks, genWarning }) {
   // Righe del documento: definizione (chiave, etichetta, presenza nel template)
   const RIGHE_DEF = [
     { k:"cont",  label:"Contabilità (1.1)",        presente: righeInfo.tmpl.righe.cont },
@@ -4266,6 +4380,14 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
               color:salvato?C.success:"white", cursor:"pointer",
               fontSize:13, fontWeight:700 }}>
             {salvato ? "✓ Preventivo salvato" : "💾 Salva preventivo"}
+          </button>
+          <button onClick={onSalvaPdf} disabled={pdfLoading}
+            title="Salva un PDF con il solo riepilogo (senza i comandi dell'app)"
+            style={{ padding:"8px 14px", background:C.card,
+              color: pdfLoading ? C.disabled : C.primary,
+              border:`1px solid ${C.border}`, borderRadius:6,
+              cursor: pdfLoading ? "not-allowed" : "pointer", fontSize:13, fontWeight:600 }}>
+            {pdfLoading ? "⏳ Creazione…" : "📑 Salva riepilogo PDF"}
           </button>
           <button onClick={()=>window.print()}
             style={{ padding:"8px 14px", background:C.card, color:C.primary,
@@ -4431,7 +4553,7 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
                   // totale di ogni voce.
                   const rows = [];
                   let lastGrp = null;
-                  items.filter(item => !item.sub).forEach((item, i) => {
+                  ordinaPerGruppo(items.filter(item => !item.sub)).forEach((item, i) => {
                     const showGrp = item.group && item.group !== lastGrp;
                     if (showGrp) {
                       lastGrp = item.group;
@@ -5132,6 +5254,38 @@ export default function App() {
   };
   useEffect(() => { reloadClienti(); }, []);
 
+  // Salva un PDF con il SOLO riepilogo. Nell'app desktop passa da Electron
+  // (finestra di salvataggio e PDF scritto su disco); nel browser ripiega
+  // su una finestra di stampa con la sola scheda, da cui si sceglie
+  // "Salva come PDF".
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const handleSalvaPdf = async () => {
+    setPdfLoading(true);
+    try {
+      const html = riepilogoHTML(items, form, T, righeInfo);
+      const isSoc = form.tipoCliente === "soc_persone" || form.tipoCliente === "soc_capitali";
+      const nome = ((isSoc ? (form.nomeSocieta || form.ragioneSociale)
+                           : `${form.nome||""} ${form.cognome||""}`.trim() || form.ragioneSociale) || "cliente")
+        .replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().replace(/\s+/g, "_").slice(0, 40) || "cliente";
+      const nomeFile = `${nome}_riepilogo.pdf`;
+
+      if (window.pdfAPI?.salvaRiepilogo) {
+        const r = await window.pdfAPI.salvaRiepilogo(html, nomeFile);
+        if (r?.ok) alert("Riepilogo salvato in:\n" + r.path);
+        else if (!r?.canceled) alert("Non è stato possibile salvare il PDF:\n" + (r?.error || "errore sconosciuto"));
+      } else {
+        const w = window.open("", "_blank");
+        if (!w) { alert("Il browser ha bloccato la finestra: consenti i popup e riprova."); return; }
+        w.document.write(html);
+        w.document.close();
+        w.onload = () => w.print();
+      }
+    } catch (e) {
+      alert("Errore nella creazione del PDF:\n" + e.message);
+    }
+    setPdfLoading(false);
+  };
+
   const handleGeneraDocs = async () => {
     setGenLoading(true);
     setDocLinks(null);
@@ -5449,6 +5603,7 @@ export default function App() {
           onReset={resetPreventivo}
           onSalva={salvaClienteCorrente}
           salvato={!!clienteAttivoId}
+          onSalvaPdf={handleSalvaPdf} pdfLoading={pdfLoading}
           onGeneraDocs={handleGeneraDocs} genLoading={genLoading} docLinks={docLinks} genWarning={genWarning}/>}
 
         {/* NAVIGAZIONE */}
@@ -5512,4 +5667,4 @@ export default function App() {
    EXPORT DI SERVIZIO — usati dai test automatici (harness Node) e
    potenzialmente da altre finestre. Non influiscono sull'app.
    ================================================================ */
-export { calcAll, calcRighe, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
+export { calcAll, calcRighe, riepilogoHTML, generaDocumenti, DEFAULT_TARIFFE, INIT, eleggibilita, eur, formatImportoLettere };
