@@ -1555,6 +1555,15 @@ function _docx_removeParasWithTextCI(xml, needle) {
     text.toLowerCase().includes(ago) ? '' : undefined);
 }
 
+// Svuota il run che contiene `needle` (la frase sparisce, il paragrafo resta)
+function _docx_svuotaRunConTesto(xml, needle) {
+  return xml.replace(/<w:r(?: [^>]*)?>[\s\S]*?<\/w:r>/g, run => {
+    const m = run.match(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/);
+    if (!m || !m[1].includes(needle)) return run;
+    return run.replace(m[0], '<w:t xml:space="preserve"></w:t>');
+  });
+}
+
 // Inserisce un nuovo paragrafo subito dopo quello che contiene `anchorText`,
 // clonandone lo stile: se l'ancora è un punto elenco, anche il nuovo lo è.
 function _docx_insertParaAfter(xml, anchorText, nuovoTesto) {
@@ -1580,10 +1589,15 @@ function _docx_compilaOppureRimuovi(xml, anchorText, valore) {
   return _docx_mapParas(xml, (para, text) => {
     if (!text.includes(anchorText)) return undefined;
     let fatto = false;
-    return para.replace(/(<w:t(?: [^>]*)?>)([^<]*)(<\/w:t>)/g, (m, a, t, z) => {
-      if (fatto || !/_{3,}/.test(t)) return m;
+    // Sostituisce il segnaposto nel run che lo contiene e gli toglie
+    // l'evidenziazione gialla: una volta compilato non è più un segnaposto.
+    return para.replace(/<w:r(?: [^>]*)?>[\s\S]*?<\/w:r>/g, (run) => {
+      if (fatto) return run;
+      const mt = run.match(/(<w:t(?: [^>]*)?>)([^<]*)(<\/w:t>)/);
+      if (!mt || !/_{3,}/.test(mt[2])) return run;
       fatto = true;
-      return a + t.replace(/_{3,}/, _xmlEsc(v)) + z;
+      const nuovo = run.replace(mt[0], mt[1] + mt[2].replace(/_{3,}/, _xmlEsc(v)) + mt[3]);
+      return nuovo.replace(/<w:highlight w:val="[^"]*"\s*\/>/g, '');
     });
   });
 }
@@ -2153,6 +2167,31 @@ async function generaDocumenti(form, items, T) {
     // Tiene solo il blocco cliente pertinente e rimuove il segnaposto "[Ovvero]"
     mandTransforms.push(xml => _docx_removeParasWithText(xml, isPF ? '{{CLIENTE_BLOCK_SOC}}' : '{{CLIENTE_BLOCK_PF}}'));
     mandTransforms.push(xml => _docx_removeParasWithText(xml, '[Ovvero]'));
+  }
+
+  // Righe-compenso dei punti non preventivati (o che in questo modello non
+  // esistono proprio: il Forfettari ha 5 righe ma solo 3 sezioni): vanno
+  // tolte, altrimenti restano "nella misura di euro — per le attività…".
+  for (let i = 0; i < 6; i++) {
+    if (mand.punti[i] > 0) continue;
+    const punto = `1.${i + 1}`;
+    mandTransforms.push(xml => _docx_removeParasWithText(xml, `di cui al punto ${punto};`));
+    mandTransforms.push(xml => _docx_removeParasWithText(xml, `di cui al punto ${punto}.`));
+  }
+
+  // "Per l'anno … il compenso annuo dovuto è ridotto ad …": sempre rimossa.
+  // Il totale è già espresso al netto dello sconto, quindi la frase sarebbe
+  // ridondante — ed è esattamente quello che la consulente ha fatto a mano
+  // nel mandato definitivo di APE SRL, pur avendo uno sconto.
+  mandTransforms.push(xml => _docx_removeParasWithText(xml, 'il compenso annuo dovuto è ridotto'));
+
+  // Clausola dello sconto: se c'è, passa in nero; se non c'è, sparisce
+  // (insieme allo spazio che la precedeva, per non lasciare " ." finale).
+  if (scontoAnnuo > 0) {
+    mandTransforms.push(xml => _docx_derossaRunsWithText(xml, 'al netto dello sconto'));
+  } else {
+    mandTransforms.push(xml => _docx_svuotaRunConTesto(xml, 'al netto dello sconto'));
+    mandTransforms.push(xml => xml.split('{{M_TOT}} </w:t>').join('{{M_TOT}}</w:t>'));
   }
 
   const mandatoTask = {
