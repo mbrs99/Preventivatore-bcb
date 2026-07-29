@@ -1944,13 +1944,16 @@ async function generaDocumenti(form, items, T) {
     '{{S_CU770}}':  lettere(cCU770),
     '{{S_CONS}}':   lettere(cCons),
     '{{S_DOMIC}}':  lettere(cDomic),
-    // "Onorario già compreso nel precedente punto {{P_REF}}" → riga
-    // Contabilità del template (nel Forfettari scala con la tariffa apertura)
-    '{{P_REF}}':  tmpl.key === 'forf' ? (tantumPresente ? '1.2' : '1.1') : '1.1',
-    // Numerazione dinamica del Forfettari (le altre 4 varianti hanno numeri fissi)
-    '{{D_CONT}}': tantumPresente ? '2' : '1',
-    '{{D_DICH}}': tantumPresente ? '3' : '2',
-    '{{D_CONS}}': tantumPresente ? '4' : '3',
+    // "Onorario già compreso nel precedente punto {{P_REF}}" → riga Contabilità
+    '{{P_REF}}':  '1.1',
+    // Numerazione del Forfettari. La tabella annuale riparte SEMPRE da 1.1,
+    // anche quando sopra c'è la tabella dell'una tantum (che ha un suo 1.1):
+    // è la convenzione degli altri quattro preventivi e di tutti e cinque i
+    // mandati, i quali rinviano ai "punti" del preventivo allegato — se qui
+    // la numerazione scalasse, quei rinvii punterebbero alla sezione sbagliata.
+    '{{D_CONT}}': '1',
+    '{{D_DICH}}': '2',
+    '{{D_CONS}}': '3',
     // Numero della sezione di dettaglio della domiciliazione: segue la riga
     // della tabella riepilogo, che cambia da modello a modello.
     '{{D_DOMIC}}': (tmpl.key === 'srl') ? '6' : '5',
@@ -4258,19 +4261,18 @@ function ordinaPerGruppo(items) {
 
 /* Numero di sezione (1.1, 1.2, …) di ciascuna riga nel documento che verrà
    generato. Non è fisso: dipende da quali righe esistono nel modello scelto.
-     Forfettari  → cont · dich · cons            (e scala di 1 se c'è l'apertura,
-                    perché lì la numerazione prosegue dopo la tabella una tantum)
+     Forfettari  → cont · dich · cons
      Semplificate/Ordinarie non Srl → cont · dich · CU-770 · cons · domic
      Ordinarie Srl → cont · dich · bilancio · CU-770 · cons · domic
      Consulenze   → dich · bilancio · CU-770 · cons · domic   (senza contabilità)
-   Negli altri modelli la tabella annuale riparte sempre da 1.1, anche quando
-   sopra c'è la tabella dell'una tantum. */
+   La tabella annuale riparte sempre da 1.1, anche quando sopra c'è la tabella
+   dell'una tantum (che ha un proprio 1.1). */
 function numeriRighe(tmpl, tantumPresente) {
   const presente = {
     cont: tmpl.righe.cont, dich: true, bil: tmpl.righe.bil,
     cu770: tmpl.righe.cu770, cons: true, domic: tmpl.righe.domic,
   };
-  let n = (tmpl.key === "forf" && tantumPresente) ? 2 : 1;
+  let n = 1;   // la tabella annuale riparte sempre da 1.1
   const out = {};
   for (const k of ["cont", "dich", "bil", "cu770", "cons", "domic"]) {
     if (presente[k]) out[k] = `1.${n++}`;
