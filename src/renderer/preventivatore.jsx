@@ -1252,6 +1252,19 @@ function calcAll(form, T) {
     add(`✨ ${vc.nome}`, val, det, vc.sezione || "Consulenza");
   }
 
+  // ── Voci a quantità selezionate ma con quantità non indicata.
+  // Il conto verrebbe zero e il servizio sparirebbe silenziosamente dai
+  // documenti (è successo davvero: voce attivata, prezzo unitario inserito,
+  // numero di invii lasciato vuoto → riga a € 0,00). Le marchiamo con ⚠ così
+  // il riepilogo scrive "da inserire" e la generazione avvisa.
+  for (const it of items) {
+    if (it.sub || (it.val || 0) > 0) continue;
+    const qtaZero = /\(×\s*0[\s)]/.test(it.label) || /(^|\s)0\s*(×|invii|fatture|lettere|doc)/.test(it.detail || "");
+    if (qtaZero && !String(it.detail || "").includes("⚠")) {
+      it.detail = `${it.detail ? it.detail + " — " : ""}⚠ quantità da indicare`;
+    }
+  }
+
   return { items, total: items.reduce((s, i) => s + (i.sub ? 0 : (i.val || 0)), 0) };
 }
 
@@ -1302,6 +1315,14 @@ function formatImportoLettere(v) {
 function todayIT() {
   const d = new Date();
   return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
+}
+
+// I campi calendario restituiscono "AAAA-MM-GG": nei documenti (e a schermo)
+// le date vanno scritte in italiano, "GG/MM/AAAA". Qualsiasi altro formato
+// viene lasciato com'è.
+function dataIT(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v ?? "").trim());
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(v ?? "").trim();
 }
 
 /* ================================================================
@@ -1634,6 +1655,106 @@ function _docx_handleMarkerPair(xml, mark, removeBlock) {
   return xml.split(open).join('').split(close).join('');
 }
 
+// ── Righe di tabella e sezioni: rimozione e "de-rossatura" ───────────────
+// I template segnano in rosso tutto ciò che va deciso caso per caso. Quando
+// l'app risolve la scelta (il servizio è preventivato, la fatturazione è
+// stata indicata, …) il testo deve diventare NERO: il rosso in un documento
+// consegnato al cliente si legge come "da rivedere".
+
+// Estremi della <w:tr> che contiene la posizione indicata.
+function _docx_rigaAt(xml, idx) {
+  const a = xml.lastIndexOf('<w:tr ', idx), b = xml.lastIndexOf('<w:tr>', idx);
+  const start = Math.max(a, b);
+  const endAt = xml.indexOf('</w:tr>', idx);
+  if (start < 0 || endAt < 0) return null;
+  return { start, end: endAt + '</w:tr>'.length };
+}
+
+// Rimuove l'intera riga di tabella che contiene il token indicato
+// (serve per togliere dal riepilogo i servizi non preventivati).
+function _docx_removeTableRowContaining(xml, marker) {
+  const idx = xml.indexOf(marker);
+  if (idx < 0) return xml;
+  const r = _docx_rigaAt(xml, idx);
+  if (!r) return xml;
+  return xml.slice(0, r.start) + xml.slice(r.end);
+}
+
+// Toglie il colore dalla PRIMA cella della riga che contiene il token:
+// è la cella con il numero e il titolo della prestazione.
+function _docx_derossaPrimaCella(xml, marker) {
+  const idx = xml.indexOf(marker);
+  if (idx < 0) return xml;
+  const r = _docx_rigaAt(xml, idx);
+  if (!r) return xml;
+  const riga = xml.slice(r.start, r.end);
+  const fineCella = riga.indexOf('</w:tc>');
+  if (fineCella < 0) return xml;
+  const pulita = riga.slice(0, fineCella).replace(/<w:color w:val="[^"]*"\s*\/>/g, '');
+  return xml.slice(0, r.start) + pulita + riga.slice(fineCella) + xml.slice(r.end);
+}
+
+// Toglie il colore dall'intestazione della sezione di dettaglio, cioè dal
+// primo paragrafo con testo della tabella che contiene il token {{S_…}}.
+function _docx_derossaIntestazioneSezione(xml, marker) {
+  const idx = xml.indexOf(marker);
+  if (idx < 0) return xml;
+  const tblStart = xml.lastIndexOf('<w:tbl>', idx);
+  if (tblStart < 0) return xml;
+  const re = /<w:p[ >][\s\S]*?<\/w:p>/g;
+  re.lastIndex = tblStart;
+  let m;
+  while ((m = re.exec(xml)) && m.index < idx) {
+    if (!_docx_textOf(m[0]).trim()) continue;
+    const pulito = m[0].replace(/<w:color w:val="[^"]*"\s*\/>/g, '');
+    return xml.slice(0, m.index) + pulito + xml.slice(m.index + m[0].length);
+  }
+  return xml;
+}
+
+// Blocco marcato <!--{{MARK_START}}--> … <!--{{MARK_END}}-->: se `rimuovi`
+// sparisce tutto; altrimenti restano solo i contenuti, in nero.
+function _docx_bloccoSezione(xml, mark, rimuovi) {
+  const open = `<!--{{${mark}_START}}-->`, close = `<!--{{${mark}_END}}-->`;
+  const i0 = xml.indexOf(open), i1 = xml.indexOf(close);
+  if (i0 < 0 || i1 < 0 || i1 < i0) return xml;
+  if (rimuovi) return xml.slice(0, i0) + xml.slice(i1 + close.length);
+  const dentro = xml.slice(i0 + open.length, i1).replace(/<w:color w:val="[^"]*"\s*\/>/g, '');
+  return xml.slice(0, i0) + dentro + xml.slice(i1 + close.length);
+}
+
+// Sostituisce l'INTERO testo del primo paragrafo che contiene `needle`
+// (il testo finisce nel primo run, gli altri run restano vuoti).
+function _docx_sostituisciTestoParagrafo(xml, needle, nuovo) {
+  let fatto = false;
+  return _docx_mapParas(xml, (para, text) => {
+    if (fatto || !text.includes(needle)) return undefined;
+    fatto = true;
+    let primo = true;
+    return para.replace(/<w:r(?: [^>]*)?>[\s\S]*?<\/w:r>/g, run => {
+      const mt = run.match(/(<w:t(?: [^>]*)?>)([^<]*)(<\/w:t>)/);
+      if (!mt) return run;
+      const testo = primo ? _xmlEsc(nuovo) : '';
+      primo = false;
+      return run.replace(mt[0], `<w:t xml:space="preserve">${testo}</w:t>`);
+    });
+  });
+}
+
+// Cambia il segno di interpunzione finale del paragrafo che contiene `needle`
+// (";" per le righe intermedie, "." per l'ultima dell'elenco).
+function _docx_terminaRiga(xml, needle, segno) {
+  return _docx_mapParas(xml, (para, text) => {
+    if (!text.includes(needle)) return undefined;
+    const ms = [...para.matchAll(/(<w:t(?: [^>]*)?>)([^<]*)(<\/w:t>)/g)].filter(m => m[2].trim());
+    if (!ms.length) return undefined;
+    const last = ms[ms.length - 1];
+    const nuovo = last[2].replace(/\s*[;.]\s*$/, '') + segno;
+    return para.slice(0, last.index) + last[1] + nuovo + last[3]
+         + para.slice(last.index + last[0].length);
+  });
+}
+
 // Escape del testo inserito nell'XML del documento
 function _xmlEsc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1802,6 +1923,13 @@ function calcRighe(form, items) {
   let cDomic = sumBy(i => i.group === "Domiciliazione");
 
   const warnings = [];
+  // Voci attivate ma senza quantità: l'importo è zero e il servizio non
+  // arriverebbe nei documenti senza che nessuno se ne accorga.
+  for (const it of items) {
+    if (!it.sub && String(it.detail || "").includes("⚠ quantità da indicare")) {
+      warnings.push(`"${it.label}": la voce è selezionata ma manca la quantità, quindi vale € 0,00 e non comparirà nei documenti.`);
+    }
+  }
   const tmpl = scegliTemplatePreventivo(form);
 
   // Ripiegamenti per le righe assenti nel template scelto
@@ -1882,15 +2010,28 @@ async function generaDocumenti(form, items, T) {
   const cliente = isSocieta
     ? (form.nomeSocieta || form.ragioneSociale || '___')
     : `${form.nome||''} ${form.cognome||''}`.trim() || form.ragioneSociale || '___';
-  const dataDoc = form.dataDocumento || todayIT();
+  const dataDoc = dataIT(form.dataDocumento) || todayIT();
   const anno    = dataDoc.split('/')[2] || new Date().getFullYear().toString();
+
+  // Decorrenza dell'incarico (art. 3 del mandato). Il campo arriva dal
+  // calendario nel formato AAAA-MM-GG; nel documento va in GG/MM/AAAA.
+  // "Conferito fino al" è sempre il 31/12 dell'anno di decorrenza.
+  const _dec = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(form.dataDecorrenza || '').trim());
+  const decorrenzaIT   = _dec ? `${_dec[3]}/${_dec[2]}/${_dec[1]}` : '';
+  const decorrenzaAnno = _dec ? _dec[1] : '';
   const nomeCompleto = isSocieta
     ? `${form.nome||''} ${form.cognome||''}`.trim()
     : cliente;
   
   // ── Block dati cliente per contratto ───────────────────────
-  const blockPF = `Il sottoscritto Sig. ${nomeCompleto} nato a ${form.luogoNascita||'___'} il ${form.dataNascita||'___'}, residente a ${form.residenza||'___'} in via ${form.via||'___'} n. ${form.civico||'__'}, C.F. ${form.cf||'_______________'}, Partita Iva ${form.piva||'_________________'} email ${form.email||'________________'}, P.E.C. ${form.pec||'___________'} successivamente denominato \u201C`;
-  const blockSoc = `Il sottoscritto Sig. ${nomeCompleto} nato a ${form.luogoNascita||'___'} il ${form.dataNascita||'___'}, residente a ${form.residenza||'___'} in via ${form.via||'___'} n. ${form.civico||'__'}, C.F. ${form.cf||'_______________'}, in nome e per conto della societ\u00e0 denominata \u201C${form.nomeSocieta||'___'}\u201D, con sede in ${form.sedeLegale||'___'} via ${form.viaSocieta||'___'} n. ${form.civicoSocieta||'__'}, Partita I.V.A. n. ${form.piva||'_____________'}, email ${form.email||'________________'}, P.E.C. ${form.pec||'____________'}, nella qualit\u00e0 di legale rappresentante, successivamente denominato \u201C`;
+  const blockPF = `Il sottoscritto Sig. ${nomeCompleto} nato a ${form.luogoNascita||'___'} il ${dataIT(form.dataNascita)||'___'}, residente a ${form.residenza||'___'} in via ${form.via||'___'} n. ${form.civico||'__'}, C.F. ${form.cf||'_______________'}, Partita Iva ${form.piva||'_________________'} email ${form.email||'________________'}, P.E.C. ${form.pec||'___________'} successivamente denominato \u201C`;
+  // C.F. e P.IVA che compaiono nell'intestazione sono quelli DELLA SOCIET\u00C0.
+  // `piva` (campo del legale rappresentante) resta come ripiego per i clienti
+  // salvati prima che i campi dedicati esistessero: l\u00EC la P.IVA della societ\u00e0
+  // era stata inserita in quel campo.
+  const cfSoc   = (form.cfSocieta   || '').trim();
+  const pivaSoc = (form.pivaSocieta || form.piva || '').trim();
+  const blockSoc = `Il sottoscritto Sig. ${nomeCompleto} nato a ${form.luogoNascita||'___'} il ${dataIT(form.dataNascita)||'___'}, residente a ${form.residenza||'___'} in via ${form.via||'___'} n. ${form.civico||'__'}, C.F. ${form.cf||'_______________'}, in nome e per conto della societ\u00e0 denominata \u201C${form.nomeSocieta||'___'}\u201D, con sede in ${form.sedeLegale||'___'} via ${form.viaSocieta||'___'} n. ${form.civicoSocieta||'__'}, C.F. ${cfSoc||'_____________'}, Partita I.V.A. n. ${pivaSoc||'_____________'}, email ${form.email||'________________'}, P.E.C. ${form.pec||'____________'}, nella qualit\u00e0 di legale rappresentante, successivamente denominato \u201C`;
 
   const isPF = !isSocieta;
 
@@ -1919,6 +2060,9 @@ async function generaDocumenti(form, items, T) {
   // ("€ 4.000,00 (quattromila/00 centesimi)").
   const lettere = v => (v > 0 ? formatImportoLettere(v) : '€ 0,00 (zero/00 centesimi)');
 
+  // Righe che finiscono nel documento, con la loro numerazione progressiva.
+  const RIG = righeDocumento(tmpl, righe);
+
   const prevTokens = {
     '{{RICHIEDENTE}}':     cliente,
     '{{N_RILE}}':          nRileStr || '_____',
@@ -1944,19 +2088,22 @@ async function generaDocumenti(form, items, T) {
     '{{S_CU770}}':  lettere(cCU770),
     '{{S_CONS}}':   lettere(cCons),
     '{{S_DOMIC}}':  lettere(cDomic),
-    // "Onorario già compreso nel precedente punto {{P_REF}}" → riga Contabilità
-    '{{P_REF}}':  '1.1',
-    // Numerazione del Forfettari. La tabella annuale riparte SEMPRE da 1.1,
-    // anche quando sopra c'è la tabella dell'una tantum (che ha un suo 1.1):
-    // è la convenzione degli altri quattro preventivi e di tutti e cinque i
-    // mandati, i quali rinviano ai "punti" del preventivo allegato — se qui
-    // la numerazione scalasse, quei rinvii punterebbero alla sezione sbagliata.
-    '{{D_CONT}}': '1',
-    '{{D_DICH}}': '2',
-    '{{D_CONS}}': '3',
-    // Numero della sezione di dettaglio della domiciliazione: segue la riga
-    // della tabella riepilogo, che cambia da modello a modello.
-    '{{D_DOMIC}}': (tmpl.key === 'srl') ? '6' : '5',
+    // "Onorario già compreso nel precedente punto {{P_REF}}" → riga Contabilità;
+    // nei modelli senza contabilità (Consulenze) rinvia alla prima riga
+    // stampata, che è quella in cui l'onorario è effettivamente compreso.
+    '{{P_REF}}':  `1.${RIG.numero[RIG.mostra.cont ? 'cont' : (RIG.ordine[0] || 'cont')] || '1'}`,
+    // Numerazione delle sezioni: calcolata sulle righe effettivamente
+    // stampate. La tabella annuale riparte SEMPRE da 1.1, anche quando sopra
+    // c'è la tabella dell'una tantum (che ha un suo 1.1): è la convenzione di
+    // tutti e cinque i mandati, i quali rinviano ai "punti" del preventivo
+    // allegato — se qui la numerazione scalasse, quei rinvii punterebbero
+    // alla sezione sbagliata.
+    '{{D_CONT}}':  RIG.numero.cont,
+    '{{D_DICH}}':  RIG.numero.dich,
+    '{{D_BIL}}':   RIG.numero.bil,
+    '{{D_CU770}}': RIG.numero.cu770,
+    '{{D_CONS}}':  RIG.numero.cons,
+    '{{D_DOMIC}}': RIG.numero.domic,
     '{{PAGAMENTO}}': pagamentoText,
   };
 
@@ -1968,6 +2115,44 @@ async function generaDocumenti(form, items, T) {
     prevTransforms.push(xml => _docx_removeTableContaining(xml, '{{C_TANTUM}}'));
     prevTransforms.push(xml => _docx_removeTableContaining(xml, 'La pratica in oggetto richiede'));
   }
+  // ── Righe del riepilogo: i servizi non preventivati spariscono dalla
+  // tabella di prima pagina, insieme alla loro sezione di dettaglio.
+  // Le righe rimaste passano in NERO (il rosso del template significa
+  // "da decidere": una volta scelto il servizio non ha più senso).
+  const TOKEN_C = { cont:'{{C_CONT}}', dich:'{{C_DICH}}', bil:'{{C_BIL}}',
+                    cu770:'{{C_CU770}}', cons:'{{C_CONS}}', domic:'{{C_DOMIC}}' };
+  const TOKEN_S = { cont:'{{S_CONT}}', dich:'{{S_DICH}}', bil:'{{S_BIL}}',
+                    cu770:'{{S_CU770}}', cons:'{{S_CONS}}', domic:'{{S_DOMIC}}' };
+  // Riga e sezione dell'una tantum: se c'è, anche lì il titolo va in nero.
+  if (tantumPresente) {
+    prevTransforms.push(xml => _docx_derossaPrimaCella(xml, '{{C_TANTUM}}'));
+    prevTransforms.push(xml => _docx_derossaIntestazioneSezione(xml, '{{S_TANTUM}}'));
+  }
+  for (const k of ORDINE_RIGHE_DOC) {
+    if (!RIG.presente[k]) continue;
+    if (RIG.mostra[k]) {
+      prevTransforms.push(xml => _docx_derossaPrimaCella(xml, TOKEN_C[k]));
+    } else {
+      prevTransforms.push(xml => _docx_removeTableRowContaining(xml, TOKEN_C[k]));
+    }
+    if (RIG.dettaglio[k]) {
+      prevTransforms.push(xml => _docx_derossaIntestazioneSezione(xml, TOKEN_S[k]));
+    }
+  }
+
+  // ── Riga "Consulenza ed assistenza tributaria generica": la cella
+  // Fatturazione del template dice "Onorario già compreso nel precedente
+  // punto 1.1". Va tenuta SOLO quando la consulenza non è valorizzata a
+  // parte; se ha un importo proprio, al suo posto va la periodicità di
+  // fatturazione come nelle altre righe (indicazione della consulente).
+  // Si scrive il segnaposto "Mensile/Trimestrale": subito dopo viene
+  // risolto (e portato in nero) dalla fatturazione globale, esattamente
+  // come accade per le altre righe.
+  if (cCons > 0) {
+    prevTransforms.push(xml => _docx_sostituisciTestoParagrafo(
+      xml, 'Onorario già compreso nel precedente punto', 'Mensile/Trimestrale'));
+  }
+
   // Fatturazione globale su tutte le righe (se scelta)
   prevTransforms.push(xml => _docx_fillFatturazione(xml, fatt));
   // De-rossa i run risolti dall'app
@@ -1975,15 +2160,13 @@ async function generaDocumenti(form, items, T) {
   if (pagamentoCompleto) {
     prevTransforms.push(xml => _docx_derossaRunsWithText(xml, '{{PAGAMENTO}}'));
   }
-  if (tmpl.key === 'forf') {
-    for (const tk of ['{{D_CONT}}', '{{D_DICH}}', '{{D_CONS}}']) {
-      prevTransforms.push(xml => _docx_derossaRunsWithText(xml, tk));
-    }
-  }
-  // IRAP: nera se la dichiarazione IRAP è inclusa, altrimenti resta rossa
-  if (form.hasIrap) {
-    prevTransforms.push(xml => _docx_derossaRunsWithText(xml, 'IRAP'));
-    prevTransforms.push(xml => _docx_derossaRunsWithText(xml, 'irap'));
+  // IRAP: nei modelli il punto elenco "predisposizione ed invio telematico
+  // della dichiarazione Irap" è scritto in nero, cioè come prestazione
+  // compresa. Se la dichiarazione IRAP non è stata preventivata il punto va
+  // TOLTO: altrimenti il documento promette un adempimento non pagato.
+  if (!form.hasIrap) {
+    prevTransforms.push(xml => _docx_removeParasWithTextCI(xml,
+      'invio telematico della dichiarazione irap'));
   }
   // Dichiarazione annuale IVA: nera se selezionata (punto del dettaglio 1.2)
   if (form.hasDichIVA) {
@@ -2017,14 +2200,11 @@ async function generaDocumenti(form, items, T) {
     }
     for (const sez of Object.keys(perSezione)) {
       const tk = PREST_TOKENS[sez];
-      // La sezione esiste nel template scelto? (es. Bilancio solo in Srl/Consulenze)
-      const presente = sez === 'cont'  ? tmpl.righe.cont
-                     : sez === 'bil'   ? tmpl.righe.bil
-                     : sez === 'cu770' ? tmpl.righe.cu770
-                     : sez === 'domic' ? tmpl.righe.domic
-                     : true;
-      if (!tk || !presente) {
-        warnings.push(`Prestazioni aggiuntive della sezione "${PREST_LABEL[sez] || sez}" non inserite: quella sezione non esiste nel template ${tmpl.nome}.`);
+      // La sezione di dettaglio esiste nel documento? Non basta che la riga
+      // sia prevista dal modello: se il servizio non è stato preventivato la
+      // sezione viene tolta, e con essa sparirebbero anche queste righe.
+      if (!tk || !RIG.dettaglio[sez]) {
+        warnings.push(`Prestazioni aggiuntive della sezione "${PREST_LABEL[sez] || sez}" non inserite: nel documento quella sezione non c'è (o perché il modello ${tmpl.nome} non la prevede, o perché il servizio non è stato preventivato).`);
         continue;
       }
       const righeSez = perSezione[sez];
@@ -2042,14 +2222,10 @@ async function generaDocumenti(form, items, T) {
   // il dettaglio resterebbe con "Per le prestazioni sopra elencate il
   // preventivo di massima ammonta ad € 0,00 (zero/00 centesimi)" — che è
   // quanto la consulente cancellava a mano.
-  for (const [token, importo] of [
-    ['{{S_CONT}}',  cCont],
-    ['{{S_DICH}}',  cDich],
-    ['{{S_BIL}}',   cBil],
-    ['{{S_CU770}}', cCU770],
-    ['{{S_CONS}}',  cCons],
-  ]) {
-    if (!(importo > 0)) prevTransforms.push(xml => _docx_removeTableContaining(xml, token));
+  for (const k of ["cont", "dich", "bil", "cu770", "cons"]) {
+    if (!RIG.dettaglio[k]) {
+      prevTransforms.push(xml => _docx_removeTableContaining(xml, TOKEN_S[k]));
+    }
   }
 
   // ── LIPE IVA di Gruppo: quando è attiva, il dettaglio 1.2 deve dirlo
@@ -2110,15 +2286,15 @@ async function generaDocumenti(form, items, T) {
   // importi sono già stati ripiegati da calcRighe su dichiarazioni e consulenza.
   const MANDATI = {
     forf:  { b64: TMPL_MAND_FORF,  nome: 'Forfettari 2026',        blocchi: 2,
-             punti: [cCont, cDich, cCons] },
+             punti: ['cont', 'dich', 'cons'] },
     sempl: { b64: TMPL_MAND_SEMPL, nome: 'Semplificate 2026',      blocchi: 2,
-             punti: [cCont, cDich, cCU770, cCons, cDomic] },
+             punti: ['cont', 'dich', 'cu770', 'cons', 'domic'] },
     ord:   { b64: TMPL_MAND_ORD,   nome: 'Ordinarie non Srl 2026', blocchi: 2,
-             punti: [cCont, cDich, cCU770, cCons, cDomic] },
+             punti: ['cont', 'dich', 'cu770', 'cons', 'domic'] },
     srl:   { b64: TMPL_MAND_SRL,   nome: 'Ordinarie Srl 2026',     blocchi: 1,
-             punti: [cCont, cDich, cBil, cCU770, cCons, cDomic] },
+             punti: ['cont', 'dich', 'bil', 'cu770', 'cons', 'domic'] },
     cons:  { b64: TMPL_MAND_CONS,  nome: 'Consulenze 2026',        blocchi: 1,
-             punti: [cDich, cBil, cCU770, cCons, cDomic] },
+             punti: ['dich', 'bil', 'cu770', 'cons', 'domic'] },
   };
   const mand = MANDATI[tmpl.key];
 
@@ -2149,20 +2325,33 @@ async function generaDocumenti(form, items, T) {
       : form.pagamentoModo === 'bonifico'
         ? 'mediante bonifico bancario'
         : 'mediante utilizzo del servizio bancario di autorizzazione continuativa di addebito S.D.D. (Sepa Direct Debit ex modello R.I.D.) [IN ALTERNATIVA] mediante bonifico bancario',
+    // Art. 3 — decorrenza e durata. Con la data indicata la frase viene
+    // compilata ("fino al" = 31/12 dell'anno di decorrenza, come da prassi
+    // dello studio); senza data resta il testo con le due alternative.
+    '{{M_DECORRENZA}}': decorrenzaIT
+      ? `dal ${decorrenzaIT} e si intende conferito fino al 31/12/${decorrenzaAnno},`
+      : 'dalla sottoscrizione della presente lettera di incarico [IN ALTERNATIVA] dal ______________ e si intende conferito fino al _______________,',
+    // Numerazione dei punti: la stessa del preventivo allegato.
+    '{{D_CONT}}':  RIG.numero.cont,
+    '{{D_DICH}}':  RIG.numero.dich,
+    '{{D_BIL}}':   RIG.numero.bil,
+    '{{D_CU770}}': RIG.numero.cu770,
+    '{{D_CONS}}':  RIG.numero.cons,
+    '{{D_DOMIC}}': RIG.numero.domic,
   };
-  // Compensi per punto, in ordine di documento. I punti non usati dal
-  // modello corrente restano "—" (non compaiono nel template).
-  for (let i = 0; i < 6; i++) {
-    const val = mand.punti[i];
-    mandTokens[`{{M_P1${i + 1}}}`] = (val > 0) ? numDoc(val) : '—';
+  // Compensi per punto: il token porta il nome del SERVIZIO, così il numero
+  // del punto può cambiare senza sfasare gli importi.
+  for (const k of ORDINE_RIGHE_DOC) {
+    mandTokens[`{{M_${k.toUpperCase()}}}`] =
+      (RIG.presente[k] && righe[k] > 0) ? numDoc(righe[k]) : '—';
   }
 
   const mandTransforms = [
     // Blocco descrizione sezione 1.1 apertura + riga compensi una tantum:
     // rimossi quando non c'è la tariffa apertura, altrimenti restano
     // (vengono comunque tolti i marker invisibili).
-    xml => _docx_handleMarkerPair(xml, 'APE_BLOCK',  !tantumPresente),
-    xml => _docx_handleMarkerPair(xml, 'APE_TANTUM', !tantumPresente),
+    xml => _docx_bloccoSezione(xml, 'APE_BLOCK',  !tantumPresente),
+    xml => _docx_bloccoSezione(xml, 'APE_TANTUM', !tantumPresente),
     // Elenco CONFERISCE ridotto al solo commercialista di riferimento
     xml => _docx_soloProfessionista(xml, form.commercialistaRif, PROFESSIONISTI),
   ];
@@ -2172,14 +2361,38 @@ async function generaDocumenti(form, items, T) {
     mandTransforms.push(xml => _docx_removeParasWithText(xml, '[Ovvero]'));
   }
 
-  // Righe-compenso dei punti non preventivati (o che in questo modello non
-  // esistono proprio: il Forfettari ha 5 righe ma solo 3 sezioni): vanno
-  // tolte, altrimenti restano "nella misura di euro — per le attività…".
-  for (let i = 0; i < 6; i++) {
-    if (mand.punti[i] > 0) continue;
-    const punto = `1.${i + 1}`;
-    mandTransforms.push(xml => _docx_removeParasWithText(xml, `di cui al punto ${punto};`));
-    mandTransforms.push(xml => _docx_removeParasWithText(xml, `di cui al punto ${punto}.`));
+  // ── Sezioni dell'art. 1: restano solo i servizi che compaiono nel
+  // preventivo, con gli stessi numeri. Quelle che restano passano in nero.
+  for (const k of mand.punti) {
+    mandTransforms.push(xml => _docx_bloccoSezione(xml, `SEC_${k.toUpperCase()}`, !RIG.mostra[k]));
+  }
+
+  // ── Righe-compenso dell'art. 4.a: si tolgono quelle dei servizi non
+  // valorizzati (altrimenti resterebbe "nella misura di euro — …"); quelle
+  // che restano diventano nere e l'ultima chiude con il punto fermo.
+  const compensiPresenti = mand.punti.filter(k => RIG.presente[k] && righe[k] > 0);
+  for (const k of mand.punti) {
+    const tk = `{{M_${k.toUpperCase()}}}`;
+    if (compensiPresenti.includes(k)) {
+      mandTransforms.push(xml => _docx_derossaParasWithText(xml, tk));
+    } else {
+      mandTransforms.push(xml => _docx_removeParasWithText(xml, tk));
+    }
+  }
+  compensiPresenti.forEach((k, i) => {
+    const tk = `{{M_${k.toUpperCase()}}}`;
+    const segno = (i === compensiPresenti.length - 1) ? '.' : ';';
+    mandTransforms.push(xml => _docx_terminaRiga(xml, tk, segno));
+  });
+
+  // ── Art. 3: se la decorrenza è stata indicata, la frase compilata va in nero.
+  if (decorrenzaIT) {
+    mandTransforms.push(xml => _docx_derossaRunsWithText(xml, '{{M_DECORRENZA}}'));
+  }
+  // ── Periodicità e modalità di pagamento: nere quando sono state scelte
+  // entrambe (altrimenti il paragrafo contiene ancora un "[IN ALTERNATIVA]").
+  if ((fatt === 'Mensile' || fatt === 'Trimestrale') && form.pagamentoModo) {
+    mandTransforms.push(xml => _docx_derossaParasWithText(xml, '{{M_PERIODICITA}}'));
   }
 
   // "Per l'anno … il compenso annuo dovuto è ridotto ad …": sempre rimossa.
@@ -2249,7 +2462,14 @@ const INIT = {
   residenza:"", via:"", civico:"",
   cf:"", piva:"", email:"", pec:"",
   nomeSocieta:"", sedeLegale:"", viaSocieta:"", civicoSocieta:"",
+  // C.F. e P.IVA DELLA SOCIETÀ (diversi da quelli del legale rappresentante):
+  // sono i dati che compaiono nell'intestazione del mandato.
+  cfSocieta:"", pivaSocieta:"",
   dataDocumento:"",           // data stampa documento
+  // Art. 3 del mandato — decorrenza dell'incarico. Se indicata, la frase
+  // "L'incarico decorre dalla sottoscrizione … [IN ALTERNATIVA] dal ____"
+  // viene sostituita da "dal <data> … fino al 31/12 dello stesso anno".
+  dataDecorrenza:"",
   hasTariffaApertura:false,   // 1.1 una tantum apertura — flag di attivazione
   tariffaApertura:"",         // 1.1 una tantum apertura (importo)
   hasContabilita:true, regimeContabile:"", nDocumenti:"", nRilevazioni:"",
@@ -3115,7 +3335,7 @@ function Step1({ form, upd, clientiSalvati = [], clienteAttivoId, onCaricaClient
             <Inp label="Denominazione / Ragione Sociale" value={form.nomeSocieta}
               onChange={v=>upd("nomeSocieta",v)} placeholder="Rossi & Bianchi S.r.l."/>
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 0.5fr", gap:12 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 0.5fr", gap:12, marginBottom:12 }}>
             <Inp label="Sede legale (comune)" value={form.sedeLegale} onChange={v=>upd("sedeLegale",v)}
               placeholder="Mestre"
               warning={validaComune(form.sedeLegale).msg}
@@ -3124,6 +3344,19 @@ function Step1({ form, upd, clientiSalvati = [], clienteAttivoId, onCaricaClient
             <Inp label="Via" value={form.viaSocieta} onChange={v=>upd("viaSocieta",v)} placeholder="Via Roma"/>
             <Inp label="N." value={form.civicoSocieta} onChange={v=>upd("civicoSocieta",v)} placeholder="10"/>
           </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <Inp label="Codice Fiscale della società" value={form.cfSocieta}
+              onChange={v=>upd("cfSocieta",v)} placeholder="04123456789"
+              warning={validaCF(form.cfSocieta).msg}/>
+            <Inp label="Partita IVA della società" value={form.pivaSocieta}
+              onChange={v=>upd("pivaSocieta",v)} placeholder="04123456789"
+              warning={validaPIVA(form.pivaSocieta).msg}/>
+          </div>
+          <p style={{ margin:"8px 0 0", fontSize:12, color:C.muted }}>
+            Sono i dati della <strong>società</strong>, non del legale rappresentante:
+            vengono riportati nell'intestazione della lettera di incarico. Nelle società di
+            capitali il codice fiscale coincide quasi sempre con la partita IVA.
+          </p>
         </Card>
       )}
 
@@ -3163,6 +3396,26 @@ function Step1({ form, upd, clientiSalvati = [], clienteAttivoId, onCaricaClient
             </select>
           </div>
         </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:12 }}>
+          <Inp label="Decorrenza dell'incarico (art. 3 del mandato)" value={form.dataDecorrenza}
+            onChange={v=>upd("dataDecorrenza",v)} type="date"/>
+          <div>
+            <label style={sty.lbl}>Conferito fino al</label>
+            <div style={{ ...sty.inp, padding:"8px 10px", display:"flex", alignItems:"center",
+              color: form.dataDecorrenza ? C.text : C.muted,
+              background:"transparent", cursor:"default" }}>
+              {form.dataDecorrenza
+                ? `31/12/${(form.dataDecorrenza.split("-")[0] || "")}`
+                : "— calcolato dalla decorrenza —"}
+            </div>
+          </div>
+        </div>
+        <p style={{ margin:"0 0 12px", fontSize:12, color:C.muted }}>
+          Se indichi la decorrenza, l'art. 3 del mandato viene compilato in nero
+          ("L'incarico decorre dal … e si intende conferito fino al 31/12 dello stesso anno").
+          Se lo lasci vuoto, resta il testo in rosso con le due alternative da scegliere a mano.
+        </p>
+
         <div>
           <label style={sty.lbl}>Commercialista di riferimento (per il mandato)</label>
           <select value={form.commercialistaRif || ""}
@@ -4267,16 +4520,43 @@ function ordinaPerGruppo(items) {
      Consulenze   → dich · bilancio · CU-770 · cons · domic   (senza contabilità)
    La tabella annuale riparte sempre da 1.1, anche quando sopra c'è la tabella
    dell'una tantum (che ha un proprio 1.1). */
-function numeriRighe(tmpl, tantumPresente) {
+const ORDINE_RIGHE_DOC = ["cont", "dich", "bil", "cu770", "cons", "domic"];
+
+/* Quali righe compaiono davvero nel documento e con quale numero.
+
+   Una riga si stampa se esiste nel modello scelto E ha un importo maggiore
+   di zero: i servizi non preventivati non devono comparire nella tabella di
+   prima pagina (richiesta della consulente). Unica eccezione la Consulenza
+   generica, che resta anche a zero perché in quel caso il template la
+   spiega con "Onorario già compreso nel precedente punto 1.1".
+
+   La numerazione è progressiva sulle SOLE righe stampate, così non restano
+   buchi (1.1 · 1.2 · 1.4) quando un servizio viene escluso. */
+function righeDocumento(tmpl, righe) {
   const presente = {
-    cont: tmpl.righe.cont, dich: true, bil: tmpl.righe.bil,
-    cu770: tmpl.righe.cu770, cons: true, domic: tmpl.righe.domic,
+    cont: !!tmpl.righe.cont, dich: true, bil: !!tmpl.righe.bil,
+    cu770: !!tmpl.righe.cu770, cons: true, domic: !!tmpl.righe.domic,
   };
-  let n = 1;   // la tabella annuale riparte sempre da 1.1
-  const out = {};
-  for (const k of ["cont", "dich", "bil", "cu770", "cons", "domic"]) {
-    if (presente[k]) out[k] = `1.${n++}`;
+  const imp = k => (righe && righe[k]) || 0;
+  const mostra = {}, dettaglio = {}, numero = {}, ordine = [];
+  for (const k of ORDINE_RIGHE_DOC) {
+    mostra[k]    = presente[k] && (imp(k) > 0 || k === "cons");
+    // La sezione di dettaglio esiste solo se il servizio è valorizzato:
+    // a zero verrebbe fuori "il preventivo ammonta ad € 0,00".
+    dettaglio[k] = presente[k] && imp(k) > 0;
   }
+  let n = 1;
+  for (const k of ORDINE_RIGHE_DOC) if (mostra[k]) { numero[k] = String(n++); ordine.push(k); }
+  // Alle righe non stampate si assegna comunque un numero (che nel documento
+  // non comparirà mai): così un eventuale residuo non mostra un token grezzo.
+  for (const k of ORDINE_RIGHE_DOC) if (!numero[k]) numero[k] = String(n++);
+  return { presente, mostra, dettaglio, numero, ordine };
+}
+
+function numeriRighe(tmpl, righe) {
+  const { mostra, numero } = righeDocumento(tmpl, righe);
+  const out = {};
+  for (const k of ORDINE_RIGHE_DOC) if (mostra[k]) out[k] = `1.${numero[k]}`;
   return out;
 }
 
@@ -4312,6 +4592,27 @@ function riepilogoHTML(items, form, T, righeInfo) {
   const fatt = form.fatturazioneGlobale || "non specificata";
   const pag  = form.pagamentoModo === "rid" ? "Addebito RID / S.D.D."
              : form.pagamentoModo === "bonifico" ? "Bonifico bancario" : "non specificato";
+
+  // Prestazioni aggiuntive all'occorrenza: righe che compaiono nel dettaglio
+  // della sezione scelta ma NON entrano nel compenso annuo. Devono comparire
+  // anche qui, altrimenti chi stampa il riepilogo non vede quello che ha
+  // scritto e non può controllarlo.
+  const nRigPdf = numeriRighe(righeInfo.tmpl, righeInfo.righe);
+  const NOMI_SEZ = { cont:"Contabilità", dich:"Dichiarazioni fiscali", bil:"Bilancio CEE",
+                     cu770:"CU / Modello 770", cons:"Consulenza generica",
+                     domic:"Domiciliazione postale" };
+  const prest = (form.prestAggiuntive || []).filter(p => (p.testo || "").trim());
+  const prestHTML = prest.length ? `<table style="margin-top:14px">
+  <thead><tr><th>Prestazioni aggiuntive all'occorrenza</th><th>Sezione del preventivo</th></tr></thead>
+  <tbody>${prest.map(p => {
+      const k = p.sezione || "cons";
+      const et = (nRigPdf[k] ? nRigPdf[k] + " " : "") + (NOMI_SEZ[k] || k);
+      return `<tr><td>${esc(p.testo.trim())}</td><td class="d">${esc(et)}</td></tr>`;
+    }).join("")}</tbody>
+</table>
+<p style="font-size:9pt;color:#777;margin:6px 0 0">Elencate nel dettaglio della sezione
+indicata con il loro prezzo, <strong>non comprese nel compenso annuo</strong>:
+si fatturano a consuntivo.</p>` : "";
 
   return `<!doctype html><html lang="it"><head><meta charset="utf-8">
 <meta name="color-scheme" content="light">
@@ -4357,7 +4658,7 @@ function riepilogoHTML(items, form, T, righeInfo) {
   ${form.note ? `<div>Note: ${esc(form.note)}</div>` : ""}
   <div>Fatturazione: ${esc(fatt)} · Pagamento: ${esc(pag)}${
     form.commercialistaRif ? ` · Riferimento: ${esc(form.commercialistaRif)}` : ""}</div>
-  <div>Documento del ${esc(form.dataDocumento || todayIT())}</div>
+  <div>Documento del ${esc(dataIT(form.dataDocumento) || todayIT())}</div>
 </div>
 
 ${tantum > 0 ? `<table class="box">
@@ -4377,7 +4678,9 @@ ${items.filter(i=>!i.sub).length ? `<table>
   </tfoot>
 </table>` : `<p style="color:#777">Nessun servizio configurato.</p>`}
 
-<div class="note">${esc(T.fonte)} · Oltre iva e cassa di previdenza ad aliquota di legge</div>
+${prestHTML}
+
+<div class="note">${esc(T.fonte)} · Oltre cassa di previdenza e IVA ad aliquota di legge</div>
 </body></html>`;
 }
 
@@ -4386,16 +4689,21 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
   // Righe del documento: definizione (chiave, etichetta, presenza nel template)
   // I numeri di sezione dipendono dal modello scelto (e dalla presenza
   // dell'una tantum nel Forfettari): vanno calcolati, non scritti a mano.
-  const nRig = numeriRighe(righeInfo.tmpl,
-    form.hasTariffaApertura && (parseFloat(form.tariffaApertura) || 0) > 0);
+  const RIG  = righeDocumento(righeInfo.tmpl, righeInfo.righe);
+  const nRig = numeriRighe(righeInfo.tmpl, righeInfo.righe);
   const RIGHE_DEF = [
-    { k:"cont",  nome:"Contabilità",             presente: righeInfo.tmpl.righe.cont },
-    { k:"dich",  nome:"Dichiarazioni fiscali",   presente: true },
-    { k:"bil",   nome:"Bilancio CEE",            presente: righeInfo.tmpl.righe.bil },
-    { k:"cu770", nome:"CU / Modello 770",        presente: righeInfo.tmpl.righe.cu770 },
-    { k:"cons",  nome:"Consulenza generica",     presente: true },
-    { k:"domic", nome:"Domiciliazione postale",  presente: righeInfo.tmpl.righe.domic },
-  ].map(r => ({ ...r, label: nRig[r.k] ? `${nRig[r.k]} ${r.nome}` : r.nome }));
+    { k:"cont",  nome:"Contabilità" },
+    { k:"dich",  nome:"Dichiarazioni fiscali" },
+    { k:"bil",   nome:"Bilancio CEE" },
+    { k:"cu770", nome:"CU / Modello 770" },
+    { k:"cons",  nome:"Consulenza generica" },
+    { k:"domic", nome:"Domiciliazione postale" },
+  ].map(r => ({ ...r,
+    presente: RIG.presente[r.k],
+    // Le prestazioni aggiuntive si agganciano alla sezione di DETTAGLIO:
+    // esiste solo se il servizio è stato valorizzato.
+    dettaglio: RIG.dettaglio[r.k],
+    label: nRig[r.k] ? `${nRig[r.k]} ${r.nome}` : r.nome }));
   return (
     <div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
@@ -4451,9 +4759,26 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
         </div>
         {form.note && <div style={{ fontSize:13, color:C.muted, marginTop:3 }}>Note: {form.note}</div>}
         <div style={{ fontSize:12, color:C.muted, marginTop:3 }}>
-          {T.fonte} · Oltre iva e cassa di previdenza ad aliquota di legge
+          {T.fonte} · Oltre cassa di previdenza e IVA ad aliquota di legge
         </div>
       </div>
+
+      {/* ── Avvisi sui dati: mostrati SUBITO, non solo dopo la generazione,
+            così un problema (tipicamente una voce senza quantità) si vede
+            prima di produrre i documenti. */}
+      {(righeInfo.warnings || []).length > 0 && (
+        <div style={{ marginBottom:16, padding:"10px 14px", background:C.warnBg,
+          border:`1px solid ${C.warnBorder}`, borderRadius:7, fontSize:13, color:C.warn,
+          display:"flex", gap:10, alignItems:"flex-start" }}>
+          <span style={{ fontSize:18, flexShrink:0 }}>⚠️</span>
+          <div>
+            <strong>Da controllare prima di generare i documenti:</strong>
+            <ul style={{ margin:"4px 0 0", paddingLeft:18, fontSize:12 }}>
+              {righeInfo.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* ── Link di download documenti generati ── */}
       {docLinks && (
@@ -4664,7 +4989,7 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
             </table>
           </div>
           <p style={{ fontSize:12, color:C.muted, textAlign:"center", marginTop:8 }}>
-            {T.fonte} · Oltre iva e cassa di previdenza ad aliquota di legge
+            {T.fonte} · Oltre cassa di previdenza e IVA ad aliquota di legge
           </p>
 
           {/* ── Ritocco finale degli importi di RIGA del documento (opzionale).
@@ -4731,7 +5056,7 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
                       upd("prestAggiuntive",arr);
                     }}
                     style={{ ...sty.inp, padding:"8px 10px", fontSize:13 }}>
-                    {RIGHE_DEF.filter(r => r.presente).map(r => (
+                    {RIGHE_DEF.filter(r => r.dettaglio).map(r => (
                       <option key={r.k} value={r.k}>{r.label}</option>
                     ))}
                   </select>
@@ -4778,7 +5103,7 @@ function Step5({ items, total, form, upd, T, righeInfo, onReset, onSalva, salvat
 const CAMPI_CLIENTE = [
   "tipoCliente","ragioneSociale","nome","cognome","dataNascita","luogoNascita",
   "residenza","via","civico","cf","piva","email","pec",
-  "nomeSocieta","sedeLegale","viaSocieta","civicoSocieta",
+  "nomeSocieta","sedeLegale","viaSocieta","civicoSocieta","cfSocieta","pivaSocieta",
 ];
 
 // Estrae un'identità univoca dal form: preferisce CF, poi P.IVA, poi nome+cognome+data.
@@ -4816,7 +5141,8 @@ function etichettaCliente(c) {
 function sottoEtichettaCliente(c) {
   const parts = [];
   if (c.cf)   parts.push("CF " + c.cf);
-  if (c.piva) parts.push("P.IVA " + c.piva);
+  if (c.pivaSocieta) parts.push("P.IVA " + c.pivaSocieta);
+  else if (c.piva)   parts.push("P.IVA " + c.piva);
   if (c.tipoCliente === "soc_persone")  parts.push("Società di Persone");
   if (c.tipoCliente === "soc_capitali") parts.push("Società di Capitali");
   if (c.tipoCliente === "pf")            parts.push("Persona fisica / Ditta Individuale");
@@ -5227,6 +5553,11 @@ export default function App() {
   // Clienti salvati: array di oggetti cliente. Caricato da memoria persistente.
   const [clientiSalvati, setClientiSalvati] = useState([]);
   const [clienteAttivoId, setClienteAttivoId] = useState(null);   // id cliente già caricato
+  // Scheda da cui si sta lavorando. A differenza di `clienteAttivoId` NON si
+  // azzera appena si modifica un campo: serve per capire, al salvataggio, che
+  // si sta correggendo una scheda esistente anche quando la correzione
+  // riguarda proprio CF o P.IVA (da cui dipende la chiave di memoria).
+  const [clienteOrigineId, setClienteOrigineId] = useState(null);
   const [modaleSalvaApri, setModaleSalvaApri] = useState(false); // modale pre-avanti
   const [modaleRiduzioneApri, setModaleRiduzioneApri] = useState(false); // modale conferma riduzione fuori 20-50
   const [modaleChiudiApri, setModaleChiudiApri] = useState(false); // modale chiudi preventivo
@@ -5247,6 +5578,7 @@ export default function App() {
     setForm(INIT);
     setStep(0);
     setClienteAttivoId(null);
+    setClienteOrigineId(null);
     setDocLinks(null);
     setGenWarning(null);
   };
@@ -5364,12 +5696,32 @@ export default function App() {
       alert("Impossibile salvare: inserire almeno nome e cognome, o Codice Fiscale, o Partita IVA.");
       return false;
     }
+    // La chiave di memoria deriva da CF / P.IVA / nome. Se si sta correggendo
+    // proprio uno di quei dati, la chiave cambia: senza questo passaggio
+    // resterebbe in memoria anche la vecchia scheda con il dato sbagliato e
+    // sembrerebbe impossibile modificarla.
+    let daRimuovere = null;
+    if (clienteOrigineId && clienteOrigineId !== key) {
+      const prec = clientiSalvati.find(c => c._key === clienteOrigineId);
+      if (prec) {
+        const aggiorna = confirm(
+          `Hai modificato i dati identificativi di "${etichettaCliente(prec)}" ` +
+          `(Codice Fiscale, Partita IVA o nominativo).\n\n` +
+          `OK  →  aggiorna quella scheda, sostituendo i dati vecchi\n` +
+          `Annulla  →  salva come cliente NUOVO, lasciando intatta la scheda precedente`);
+        if (aggiorna) daRimuovere = clienteOrigineId;
+      }
+    }
     const data = { _updatedAt: Date.now(), _form: { ...form } };
     for (const k of CAMPI_CLIENTE) data[k] = form[k] ?? "";
     try {
       await window.storage.set(key, JSON.stringify(data));
+      if (daRimuovere) {
+        try { await window.storage.delete(daRimuovere); } catch(_) {}
+      }
       await reloadClienti();
       setClienteAttivoId(key);
+      setClienteOrigineId(key);
       return true;
     } catch(e) {
       alert("Errore nel salvataggio: " + e.message);
@@ -5395,6 +5747,7 @@ export default function App() {
       setForm(f => ({ ...f, ...patch }));
     }
     setClienteAttivoId(cliente._key);
+    setClienteOrigineId(cliente._key);
   };
 
   // Elimina un cliente salvato
@@ -5404,6 +5757,7 @@ export default function App() {
       await window.storage.delete(cliente._key);
       await reloadClienti();
       if (clienteAttivoId === cliente._key) setClienteAttivoId(null);
+      if (clienteOrigineId === cliente._key) setClienteOrigineId(null);
     } catch(e) {
       alert("Errore nell'eliminazione: " + e.message);
     }
